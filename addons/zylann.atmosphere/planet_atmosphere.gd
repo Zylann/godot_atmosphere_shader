@@ -1,3 +1,8 @@
+# Wraps an atmosphere rendering shader.
+# When the camera is far, it uses a cube bounding the planet.
+# When the camera is close, it uses a fullscreen quad (does not work in editor).
+# Common parameters are exposed as properties.
+
 tool
 extends Spatial
 
@@ -10,17 +15,20 @@ const AtmosphereShader = preload("./planet_atmosphere.shader")
 export var planet_radius := 1.0 setget set_planet_radius
 export var atmosphere_height := 0.1 setget set_atmosphere_height
 export(NodePath) var sun_path : NodePath setget set_sun_path
-export var day_color0 := Color(0.29, 0.39, 0.92) setget set_day_color0
-export var day_color1 := Color(0.76, 0.90, 1.0) setget set_day_color1
-export var night_color0 := Color(0.15, 0.10, 0.33) setget set_night_color0
-export var night_color1 := Color(0.0, 0.0, 0.0) setget set_night_color1
-export var density := 0.2 setget set_density
 
 var _far_mesh : CubeMesh
 var _near_mesh : QuadMesh
 var _mode := MODE_FAR
 var _mesh_instance : MeshInstance
 
+# These parameters are assigned internally,
+# they don't need to be shown in the list of shader params
+const _api_shader_params = {
+	"u_planet_radius": true,
+	"u_atmosphere_height": true,
+	"u_clip_mode": true,
+	"u_sun_position": true
+}
 
 func _init():
 	var material = ShaderMaterial.new()
@@ -41,22 +49,75 @@ func _init():
 	
 	_update_cull_margin()
 
+	# Setup defaults for the builtin shader
+	# This is a workaround for https://github.com/godotengine/godot/issues/24488
+	material.set_shader_param("u_day_color0", Color(0.29, 0.39, 0.92))
+	material.set_shader_param("u_day_color1", Color(0.76, 0.90, 1.0))
+	material.set_shader_param("u_night_color0", Color(0.15, 0.10, 0.33))
+	material.set_shader_param("u_night_color1", Color(0.0, 0.0, 0.0))
+	material.set_shader_param("u_density", 0.2)
+	material.set_shader_param("u_sun_position", Vector3(5000, 0, 0))
+
 
 func _ready():
 	var mat = _mesh_instance.material_override
 	mat.set_shader_param("u_planet_radius", planet_radius)
 	mat.set_shader_param("u_atmosphere_height", atmosphere_height)
 	mat.set_shader_param("u_clip_mode", false)
-	mat.set_shader_param("u_day_color", day_color0)
-	mat.set_shader_param("u_day_color", day_color1)
-	mat.set_shader_param("u_night_color", night_color0)
-	mat.set_shader_param("u_night_color", night_color1)
+
+
+func set_shader_param(param_name: String, value):
+	_mesh_instance.material_override.set_shader_param(param_name, value)
+
+
+func get_shader_param(param_name: String):
+	return _mesh_instance.material_override.get_shader_param(param_name)
+
+
+# Shader parameters are exposed like this so we can have more custom shaders in the future,
+# without forcing to change the node/script entirely
+func _get_property_list():
+	var props = []
+	var mat = _mesh_instance.material_override
+	var shader_params := VisualServer.shader_get_param_list(mat.shader.get_rid())
+	for p in shader_params:
+		if _api_shader_params.has(p.name):
+			continue
+		var cp := {}
+		for k in p:
+			cp[k] = p[k]
+		cp.name = str("shader_params/", p.name)
+		props.append(cp)
+	return props
+
+
+func _get(key: String):
+	if key.begins_with("shader_params/"):
+		var param_name = key.right(len("shader_params/"))
+		var mat = _mesh_instance.material_override
+		return mat.get_shader_param(param_name)
+
+
+func _set(key: String, value):
+	if key.begins_with("shader_params/"):
+		var param_name = key.right(len("shader_params/"))
+		var mat = _mesh_instance.material_override
+		mat.set_shader_param(param_name, value)
+
+
+func _get_configuration_warning() -> String:
+	if sun_path == null or sun_path.is_empty():
+		return "The path to the sun is not assigned."
+	var light = get_node(sun_path)
+	if not (light is Spatial):
+		return "The assigned sun node is not a Spatial."
+	return ""
 
 
 func set_planet_radius(new_radius: float):
 	if planet_radius == new_radius:
 		return
-	planet_radius = new_radius
+	planet_radius = max(new_radius, 0.0)
 	_mesh_instance.material_override.set_shader_param("u_planet_radius", planet_radius)
 	_update_cull_margin()
 
@@ -68,48 +129,14 @@ func _update_cull_margin():
 func set_atmosphere_height(new_height: float):
 	if atmosphere_height == new_height:
 		return
-	atmosphere_height = new_height
+	atmosphere_height = max(new_height, 0.0)
 	_mesh_instance.material_override.set_shader_param("u_atmosphere_height", atmosphere_height)
 	_update_cull_margin()
 
 
 func set_sun_path(new_sun_path: NodePath):
 	sun_path = new_sun_path
-
-
-func set_day_color0(new_day_color0: Color):
-	if day_color0 == new_day_color0:
-		return
-	day_color0 = new_day_color0
-	_mesh_instance.material_override.set_shader_param("u_day_color0", day_color0)
-
-
-func set_day_color1(new_day_color1: Color):
-	if day_color1 == new_day_color1:
-		return
-	day_color1 = new_day_color1
-	_mesh_instance.material_override.set_shader_param("u_day_color1", day_color1)
-
-
-func set_night_color0(new_night_color0: Color):
-	if night_color0 == new_night_color0:
-		return
-	night_color0 = new_night_color0
-	_mesh_instance.material_override.set_shader_param("u_night_color0", night_color0)
-
-
-func set_night_color1(new_night_color1: Color):
-	if night_color1 == new_night_color1:
-		return
-	night_color1 = new_night_color1
-	_mesh_instance.material_override.set_shader_param("u_night_color1", night_color1)
-
-
-func set_density(new_density: float):
-	if new_density == density:
-		return
-	density = new_density
-	_mesh_instance.material_override.set_shader_param("u_density", density)
+	update_configuration_warning()
 
 
 func _set_mode(mode: int):
