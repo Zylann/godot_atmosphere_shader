@@ -11,15 +11,18 @@ const MODE_FAR = 1
 const SWITCH_MARGIN_RATIO = 1.1
 
 const AtmosphereShader = preload("./planet_atmosphere.shader")
+const DefaultShader = AtmosphereShader
 
 export var planet_radius := 1.0 setget set_planet_radius
 export var atmosphere_height := 0.1 setget set_atmosphere_height
 export(NodePath) var sun_path : NodePath setget set_sun_path
+export(Shader) var custom_shader setget set_custom_shader
 
 var _far_mesh : CubeMesh
 var _near_mesh : QuadMesh
 var _mode := MODE_FAR
 var _mesh_instance : MeshInstance
+var _prev_atmo_clip_distance : float = 0.0
 
 # These parameters are assigned internally,
 # they don't need to be shown in the list of shader params
@@ -60,25 +63,43 @@ func _init():
 
 
 func _ready():
-	var mat = _mesh_instance.material_override
+	var mat = _get_material()
 	mat.set_shader_param("u_planet_radius", planet_radius)
 	mat.set_shader_param("u_atmosphere_height", atmosphere_height)
 	mat.set_shader_param("u_clip_mode", false)
 
 
+func set_custom_shader(shader: Shader):
+	custom_shader = shader
+	var mat := _get_material()
+	if custom_shader == null:
+		mat.shader = DefaultShader
+	else:
+		var previous_shader = mat.shader
+		mat.shader = shader
+		if Engine.editor_hint:
+			# Fork built-in shader
+			if shader.code == "" and previous_shader == DefaultShader:
+				shader.code = DefaultShader.code
+
+
+func _get_material() -> ShaderMaterial:
+	return _mesh_instance.material_override as ShaderMaterial
+
+
 func set_shader_param(param_name: String, value):
-	_mesh_instance.material_override.set_shader_param(param_name, value)
+	_get_material().set_shader_param(param_name, value)
 
 
 func get_shader_param(param_name: String):
-	return _mesh_instance.material_override.get_shader_param(param_name)
+	return _get_material().get_shader_param(param_name)
 
 
 # Shader parameters are exposed like this so we can have more custom shaders in the future,
 # without forcing to change the node/script entirely
 func _get_property_list():
-	var props = []
-	var mat = _mesh_instance.material_override
+	var props := []
+	var mat := _get_material()
 	var shader_params := VisualServer.shader_get_param_list(mat.shader.get_rid())
 	for p in shader_params:
 		if _api_shader_params.has(p.name):
@@ -94,14 +115,14 @@ func _get_property_list():
 func _get(key: String):
 	if key.begins_with("shader_params/"):
 		var param_name = key.right(len("shader_params/"))
-		var mat = _mesh_instance.material_override
+		var mat := _get_material()
 		return mat.get_shader_param(param_name)
 
 
 func _set(key: String, value):
 	if key.begins_with("shader_params/"):
-		var param_name = key.right(len("shader_params/"))
-		var mat = _mesh_instance.material_override
+		var param_name := key.right(len("shader_params/"))
+		var mat := _get_material()
 		mat.set_shader_param(param_name, value)
 
 
@@ -144,7 +165,7 @@ func _set_mode(mode: int):
 		return
 	_mode = mode
 
-	var mat = _mesh_instance.material_override
+	var mat := _get_material()
 
 	if _mode == MODE_NEAR:
 		if OS.is_stdout_verbose():
@@ -167,7 +188,7 @@ func _process(_delta):
 	var cam_pos := Vector3()
 	var cam_near := 0.1
 	
-	var cam = get_viewport().get_camera()
+	var cam := get_viewport().get_camera()
 
 	if cam != null:
 		cam_pos = cam.global_transform.origin
@@ -193,8 +214,13 @@ func _process(_delta):
 		_set_mode(MODE_FAR)
 
 	if _mode == MODE_FAR:
-		_mesh_instance.scale = \
-			Vector3(atmo_clip_distance, atmo_clip_distance, atmo_clip_distance)
+		if _prev_atmo_clip_distance != atmo_clip_distance:
+			_prev_atmo_clip_distance = atmo_clip_distance
+			# The mesh instance should not be scaled, so we resize the cube instead
+			var cm = CubeMesh.new()
+			cm.size = Vector3(atmo_clip_distance, atmo_clip_distance, atmo_clip_distance)
+			_mesh_instance.mesh = cm
+			_far_mesh = cm
 	
 	# Lazily avoiding the node referencing can of worms.
 	# Not very efficient but I assume there won't be many atmospheres in the game.
@@ -202,5 +228,5 @@ func _process(_delta):
 	if has_node(sun_path):
 		var sun = get_node(sun_path)
 		if sun is Spatial:
-			_mesh_instance.material_override.set_shader_param(
-				"u_sun_position", sun.global_transform.origin)
+			var mat := _get_material()
+			mat.set_shader_param("u_sun_position", sun.global_transform.origin)
