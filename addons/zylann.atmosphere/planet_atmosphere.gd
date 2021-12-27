@@ -159,7 +159,7 @@ func _get_configuration_warnings() -> PackedStringArray:
 	var light = get_node(_sun_path)
 	if not (light is Node3D):
 		return PackedStringArray(["The assigned sun node is not a Node3D."])
-	return PackedStringArray([])
+	return PackedStringArray()
 
 
 func set_planet_radius(new_radius: float):
