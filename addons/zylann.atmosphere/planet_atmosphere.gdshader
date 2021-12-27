@@ -80,6 +80,7 @@ void vertex() {
 	// atmospheres on screen and have them properly sorted. Besides, it could reduce pixel cost.
 	// So this is an option.
 	if (u_clip_mode) {
+	//if(true) {
 		POSITION = vec4(VERTEX, 1.0);
 	} else {
 		// Godot expects us to fill in `POSITION` if we mention it at all in `vertex()`,
