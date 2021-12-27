@@ -158,7 +158,7 @@ func _get_configuration_warnings() -> PackedStringArray:
 		return PackedStringArray(["The path to the sun is not assigned."])
 	var light = get_node(_sun_path)
 	if not (light is Node3D):
-		return PackedStringArray(["The assigned sun node is not a Spatial."])
+		return PackedStringArray(["The assigned sun node is not a Node3D."])
 	return PackedStringArray([])
 
 
