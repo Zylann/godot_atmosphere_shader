@@ -153,13 +153,13 @@ func _set(key: String, value):
 		mat.set_shader_param(param_name, value)
 
 
-func _get_configuration_warning() -> String:
+func _get_configuration_warnings() -> PackedStringArray:
 	if _sun_path == null or _sun_path.is_empty():
-		return "The path to the sun is not assigned."
+		return PackedStringArray(["The path to the sun is not assigned."])
 	var light = get_node(_sun_path)
 	if not (light is Node3D):
-		return "The assigned sun node is not a Spatial."
-	return ""
+		return PackedStringArray(["The assigned sun node is not a Spatial."])
+	return PackedStringArray([])
 
 
 func set_planet_radius(new_radius: float):
