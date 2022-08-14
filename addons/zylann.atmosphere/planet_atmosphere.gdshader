@@ -92,8 +92,8 @@ void vertex() {
 	}
 	
 	vec4 world_pos = MODEL_MATRIX * vec4(0, 0, 0, 1);
-	v_planet_center_viewspace = (INV_CAMERA_MATRIX * world_pos).xyz;
-	v_sun_center_viewspace = (INV_CAMERA_MATRIX * vec4(u_sun_position, 1.0)).xyz;
+	v_planet_center_viewspace = (VIEW_MATRIX * world_pos).xyz;
+	v_sun_center_viewspace = (VIEW_MATRIX * vec4(u_sun_position, 1.0)).xyz;
 }
 
 void fragment() {
