@@ -104,9 +104,9 @@ void fragment() {
 	vec4 view_coords = INV_PROJECTION_MATRIX * vec4(ndc, 1.0);
 	//view_coords.xyz /= view_coords.w;
 	//float linear_depth = -view_coords.z; // Not what I want because it changes when looking around
-	vec4 world_coords = CAMERA_MATRIX * view_coords;
+	vec4 world_coords = INV_VIEW_MATRIX * view_coords;
 	vec3 pos_world = world_coords.xyz / world_coords.w;
-	vec3 cam_pos_world = (CAMERA_MATRIX * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+	vec3 cam_pos_world = (INV_VIEW_MATRIX * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
 	// I wonder if there is a faster way to get to that distance...
 	float linear_depth = distance(cam_pos_world, pos_world);
 	
