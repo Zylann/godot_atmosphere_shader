@@ -91,7 +91,7 @@ void vertex() {
 		//	mat4(CAMERA_MATRIX[0],CAMERA_MATRIX[1],CAMERA_MATRIX[2],WORLD_MATRIX[3]);
 	}
 	
-	vec4 world_pos = WORLD_MATRIX * vec4(0, 0, 0, 1);
+	vec4 world_pos = MODEL_MATRIX * vec4(0, 0, 0, 1);
 	v_planet_center_viewspace = (INV_CAMERA_MATRIX * world_pos).xyz;
 	v_sun_center_viewspace = (INV_CAMERA_MATRIX * vec4(u_sun_position, 1.0)).xyz;
 }
