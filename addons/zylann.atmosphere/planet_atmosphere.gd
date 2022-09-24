@@ -127,7 +127,7 @@ func get_shader_param(param_name: String):
 func _get_property_list():
 	var props := []
 	var mat := _get_material()
-	var shader_params := RenderingServer.shader_get_shader_uniform_list(mat.shader.get_rid())
+	var shader_params := RenderingServer.get_shader_parameter_list(mat.shader.get_rid())
 	for p in shader_params:
 		if _api_shader_params.has(p.name):
 			continue
