@@ -60,8 +60,9 @@ const _api_shader_params = {
 	&"u_sun_position": true
 }
 
+
 func _init():
-	var material = ShaderMaterial.new()
+	var material := ShaderMaterial.new()
 	material.shader = AtmosphereShader
 	_mesh_instance = MeshInstance3D.new()
 	_mesh_instance.material_override = material
@@ -248,7 +249,7 @@ func _process(_delta):
 		if _prev_atmo_clip_distance != atmo_clip_distance:
 			_prev_atmo_clip_distance = atmo_clip_distance
 			# The mesh instance should not be scaled, so we resize the cube instead
-			var cm = BoxMesh.new()
+			var cm := BoxMesh.new()
 			cm.size = Vector3(atmo_clip_distance, atmo_clip_distance, atmo_clip_distance)
 			_mesh_instance.mesh = cm
 			_far_mesh = cm
