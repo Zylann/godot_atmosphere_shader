@@ -70,7 +70,9 @@ func _init():
 	add_child(_mesh_instance)
 
 	_near_mesh = QuadMesh.new()
+	_near_mesh.orientation = PlaneMesh.FACE_Z
 	_near_mesh.size = Vector2(2.0, 2.0)
+	_near_mesh.flip_faces = true
 	
 	#_far_mesh = _create_far_mesh()
 	_far_mesh = BoxMesh.new()
@@ -262,4 +264,27 @@ func _process(_delta):
 		if sun is Node3D:
 			var mat := _get_material()
 			mat.set_shader_parameter("u_sun_position", sun.global_transform.origin)
+
+
+#static func _make_quad_mesh() -> Mesh:
+#	#  2---3
+#	#  | x |
+#	#  0---1
+#	var vertices = [
+#		Vector3(-1, -1, 0),
+#		Vector3(1, -1, 0),
+#		Vector3(-1, 1, 0),
+#		Vector3(1, 1, 0)
+#	]
+#	var indices = [
+#		0, 2, 1,
+#		1, 2, 3
+#	]
+#	var arrays = []
+#	arrays.resize(Mesh.ARRAY_MAX)
+#	arrays[Mesh.ARRAY_VERTEX] = PackedVector3Array(vertices)
+#	arrays[Mesh.ARRAY_INDEX] = PackedInt32Array(indices)
+#	var mesh = ArrayMesh.new()
+#	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+#	return mesh
 
