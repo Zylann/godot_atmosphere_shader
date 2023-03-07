@@ -66,7 +66,7 @@ func _init():
 	material.shader = AtmosphereShader
 	_mesh_instance = MeshInstance3D.new()
 	_mesh_instance.material_override = material
-	_mesh_instance.cast_shadow = false
+	_mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(_mesh_instance)
 
 	_near_mesh = QuadMesh.new()
