@@ -1,4 +1,4 @@
-Atmosphere shader for Godot Engine
+Atmosphere shader for Godot Engine 4
 ====================================
 
 This contains a simple atmosphere shader usable on planets. I developped this for a tech demo I'm working on, so I thought of making it an addon.
