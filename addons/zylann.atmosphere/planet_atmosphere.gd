@@ -10,8 +10,12 @@ const MODE_NEAR = 0
 const MODE_FAR = 1
 const SWITCH_MARGIN_RATIO = 1.1
 
-const AtmosphereShader = preload("./planet_atmosphere.gdshader")
+const AtmosphereShader = preload("./shaders/planet_atmosphere_clouds.gdshader")
 const DefaultShader = AtmosphereShader
+const BlueNoiseTexture = preload("./blue_noise.png")
+
+const OpticalDepthBaker = preload("./optical_depth_baker.gd")
+
 
 var _planet_radius := 1.0
 @export var planet_radius: float:
@@ -51,13 +55,20 @@ var _mode := MODE_FAR
 var _mesh_instance : MeshInstance3D
 var _prev_atmo_clip_distance : float = 0.0
 
+var _optical_depth_baker : OpticalDepthBaker
+var _optical_depth_texture : Texture2D
+
 # These parameters are assigned internally,
 # they don't need to be shown in the list of shader params
 const _api_shader_params = {
-	&"u_planet_radius": true,
-	&"u_atmosphere_height": true,
-	&"u_clip_mode": true,
-	&"u_sun_position": true
+	"u_planet_radius": true,
+	"u_atmosphere_height": true,
+	"u_clip_mode": true,
+	"u_sun_position": true,
+	"u_world_to_model_matrix": true,
+	"u_blue_noise_texture": true,
+	"u_cloud_coverage_rotation": true,
+	"u_optical_depth_texture": true
 }
 
 
@@ -84,19 +95,21 @@ func _init():
 
 	# Setup defaults for the builtin shader
 	# This is a workaround for https://github.com/godotengine/godot/issues/24488
-	material.set_shader_parameter("u_day_color0", Color(0.29, 0.39, 0.92))
-	material.set_shader_parameter("u_day_color1", Color(0.76, 0.90, 1.0))
-	material.set_shader_parameter("u_night_color0", Color(0.15, 0.10, 0.33))
-	material.set_shader_parameter("u_night_color1", Color(0.0, 0.0, 0.0))
-	material.set_shader_parameter("u_density", 0.2)
-	material.set_shader_parameter("u_sun_position", Vector3(5000, 0, 0))
+	material.set_shader_parameter(&"u_day_color0", Color(0.29, 0.39, 0.92))
+	material.set_shader_parameter(&"u_day_color1", Color(0.76, 0.90, 1.0))
+	material.set_shader_parameter(&"u_night_color0", Color(0.15, 0.10, 0.33))
+	material.set_shader_parameter(&"u_night_color1", Color(0.0, 0.0, 0.0))
+	material.set_shader_parameter(&"u_density", 0.2)
+	material.set_shader_parameter(&"u_sun_position", Vector3(5000, 0, 0))
+	material.set_shader_parameter(&"u_blue_noise_texture", BlueNoiseTexture)
 
 
 func _ready():
 	var mat := _get_material()
-	mat.set_shader_parameter("u_planet_radius", _planet_radius)
-	mat.set_shader_parameter("u_atmosphere_height", _atmosphere_height)
-	mat.set_shader_parameter("u_clip_mode", 0.0)
+	# Must assign those in _ready because they are set by the scene loader, after _init
+	mat.set_shader_parameter(&"u_planet_radius", _planet_radius)
+	mat.set_shader_parameter(&"u_atmosphere_height", _atmosphere_height)
+	mat.set_shader_parameter(&"u_clip_mode", 0.0)
 
 
 func set_custom_shader(shader: Shader):
@@ -111,6 +124,26 @@ func set_custom_shader(shader: Shader):
 			# Fork built-in shader
 			if shader.code == "" and previous_shader == DefaultShader:
 				shader.code = DefaultShader.code
+	
+	var uniforms := _custom_shader.get_shader_uniform_list()
+	var needs_optical_depth := false
+	for uniform in uniforms:
+		if uniform.name == "u_optical_depth_texture":
+			needs_optical_depth = true
+			break
+	
+	if needs_optical_depth:
+		if _optical_depth_baker == null:
+			_optical_depth_baker = OpticalDepthBaker.new()
+			add_child(_optical_depth_baker)
+			_optical_depth_baker.baked.connect(_on_optical_depth_baked)
+		_optical_depth_baker.request_bake(mat)
+
+
+func _on_optical_depth_baked(tex: Texture2D):
+	_optical_depth_texture = tex
+	var mat := _get_material()
+	mat.set_shader_parameter(&"u_optical_depth_texture", tex)
 
 
 func _get_material() -> ShaderMaterial:
@@ -256,14 +289,24 @@ func _process(_delta):
 			_mesh_instance.mesh = cm
 			_far_mesh = cm
 	
+	var mat := _get_material()
+	
 	# Lazily avoiding the node referencing can of worms.
 	# Not very efficient but I assume there won't be many atmospheres in the game.
 	# In Godot 4 it could be replaced by caching the object ID in some way
 	if has_node(_sun_path):
 		var sun = get_node(_sun_path)
 		if sun is Node3D:
-			var mat := _get_material()
-			mat.set_shader_parameter("u_sun_position", sun.global_transform.origin)
+			mat.set_shader_parameter(&"u_sun_position", sun.global_transform.origin)
+	
+	# We need this for mapping stuff around the planet.
+	# TODO Ideally we need view_to_model, which is better to avoid conversions with large numbers.
+	var world_to_model_matrix := global_transform.inverse()
+	mat.set_shader_parameter(&"u_world_to_model_matrix", world_to_model_matrix)
+	
+	# TODO Expose cloud coverage rotation speed
+	var time := float(Time.get_ticks_msec()) / 1000.0
+	mat.set_shader_parameter(&"u_cloud_coverage_rotation", Transform2D().rotated(time * 0.002))
 
 
 #static func _make_quad_mesh() -> Mesh:
