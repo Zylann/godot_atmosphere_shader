@@ -15,7 +15,7 @@ uniform float u_day_night_transition_scale = 2.0;
 float get_atmo_factor(vec3 ray_origin, vec3 ray_dir, vec3 planet_center,
 	float t_begin, float t_end, vec3 sun_dir, out float light_factor) {
 
-	const int steps = 16;
+	const int steps = ATMOSPHERE_RAYMARCH_STEPS;
 	
 	float inv_steps = 1.0 / float(steps);
 	float step_len = (t_end - t_begin) * inv_steps;

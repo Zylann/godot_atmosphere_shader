@@ -1,6 +1,7 @@
 shader_type spatial;
 render_mode unshaded;//, depth_draw_alpha_prepass;
 
+#define ATMOSPHERE_RAYMARCH_STEPS 8
 #include "include/planet_atmosphere_main.gdshaderinc"
 
 uniform sampler2D u_depth_texture : hint_depth_texture;

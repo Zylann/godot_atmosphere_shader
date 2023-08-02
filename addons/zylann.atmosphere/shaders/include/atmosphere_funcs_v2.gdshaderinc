@@ -38,7 +38,7 @@ vec4 compute_atmosphere_v2(
 	vec3 sun_dir,
 	float jitter
 ) {
-	const int steps = 8;
+	const int steps = ATMOSPHERE_RAYMARCH_STEPS;
 	
 	// TODO Compute this in script?
 	vec3 scattering_coefficients = vec3(

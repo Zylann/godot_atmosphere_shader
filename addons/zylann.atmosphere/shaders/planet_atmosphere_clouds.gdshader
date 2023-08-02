@@ -2,6 +2,8 @@ shader_type spatial;
 render_mode unshaded;//, depth_draw_alpha_prepass;
 
 #define CLOUDS_ENABLED
+#define CLOUDS_MAX_RAYMARCH_STEPS 32
+#define ATMOSPHERE_RAYMARCH_STEPS 8
 #include "include/planet_atmosphere_main.gdshaderinc"
 
 uniform sampler2D u_depth_texture : hint_depth_texture;

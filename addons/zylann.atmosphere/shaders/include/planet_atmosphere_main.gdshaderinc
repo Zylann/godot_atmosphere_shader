@@ -16,6 +16,7 @@
 //#ifndef CLOUDS_ENABLED
 //#define CLOUDS_ENABLED
 //#endif
+//#define ATMOSPHERE_LITE
 
 #ifdef ATMOSPHERE_LITE
 #include "atmosphere_funcs_v1.gdshaderinc"
@@ -41,7 +42,6 @@
 //
 #define CLOUDS_ALWAYS_LOW_QUALITY
 //#define CLOUDS_RAYMARCHED_LIGHTING
-#define CLOUDS_MAX_RAYMARCH_STEPS 32
 #include "cloud_funcs.gdshaderinc"
 
 uniform float u_cloud_density_scale = 50.0;
@@ -155,7 +155,7 @@ void atmosphere_fragment(
 		float jitter = texelFetch(u_blue_noise_texture, ivec2(jitter_uv) & ivec2(0xff), 0).r;
 //		jitter = 0.0;
 
-#ifdef LITE_ATMOSPHERE
+#ifdef ATMOSPHERE_LITE
 		// Old version that used a lot more faking and lacked realism
 		vec4 atmosphere = compute_atmosphere(ray_origin, ray_dir, in_v_planet_center_viewspace,
 			t_begin, t_end, sun_dir);
@@ -188,6 +188,12 @@ void atmosphere_fragment(
 				// This saves 0.5ms in ground views on a 1060
 				&& (linear_depth > rs_clouds_bottom.y || rs_clouds_bottom.x > 0.0)
 			) {
+				// When under the cloud layer, this improves quality significantly,
+				// unfortunately entering the cloud layer causes a jarring transition
+//				if (rs_clouds_bottom.x < 0.0) {
+//					cloud_rs.x = rs_clouds_bottom.y;
+//				}
+				
 				mat4 view_to_model_matrix = u_world_to_model_matrix * inv_view_matrix;
 				vec3 ray_origin_world = (view_to_model_matrix * vec4(ray_origin, 1.0)).xyz;
 				vec3 ray_dir_world = (view_to_model_matrix * vec4(ray_dir, 0.0)).xyz;

@@ -3,6 +3,10 @@
 
 #include "planet_common.gdshaderinc"
 
+#ifndef ATMOSPHERE_RAYMARCH_STEPS
+#define ATMOSPHERE_RAYMARCH_STEPS 16
+#endif
+
 uniform float u_density = 0.2;
 
 float get_atmosphere_density(float height) {
