@@ -48,6 +48,8 @@ var _custom_shader : Shader
 	set(value):
 		set_custom_shader(value)
 
+# In degrees per second
+@export var clouds_rotation_speed : float = 1.0
 
 var _far_mesh : BoxMesh
 var _near_mesh : QuadMesh
@@ -306,7 +308,8 @@ func _process(_delta):
 	
 	# TODO Expose cloud coverage rotation speed
 	var time := float(Time.get_ticks_msec()) / 1000.0
-	mat.set_shader_parameter(&"u_cloud_coverage_rotation", Transform2D().rotated(time * 0.002))
+	mat.set_shader_parameter(&"u_cloud_coverage_rotation", Transform2D().rotated(
+		time * deg_to_rad(clouds_rotation_speed)))
 
 
 #static func _make_quad_mesh() -> Mesh:
