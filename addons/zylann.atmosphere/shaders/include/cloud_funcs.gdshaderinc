@@ -100,7 +100,7 @@ float get_light_raymarched(vec3 pos0, vec3 sun_dir, float jitter, float alpha0,
 	float time, CloudSettings settings) {
 	
 	const int steps = 6;
-	const float reach = 0.02;
+	float reach = (settings.top_height - settings.bottom_height) * 0.15;
 //	const float cone_dispersion = 0.2;
 
 	float pos0_height = length(pos0) - settings.bottom_height;
