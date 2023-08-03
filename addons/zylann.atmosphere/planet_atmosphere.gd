@@ -204,7 +204,7 @@ func set_planet_radius(new_radius: float):
 		return
 	_planet_radius = maxf(new_radius, 0.0)
 	var sm : ShaderMaterial = _mesh_instance.material_override
-	sm.set_shader_parameter("u_planet_radius", _planet_radius)
+	sm.set_shader_parameter(&"u_planet_radius", _planet_radius)
 	_update_cull_margin()
 
 
@@ -217,7 +217,7 @@ func set_atmosphere_height(new_height: float):
 		return
 	_atmosphere_height = maxf(new_height, 0.0)
 	var sm : ShaderMaterial = _mesh_instance.material_override
-	sm.set_shader_parameter("u_atmosphere_height", _atmosphere_height)
+	sm.set_shader_parameter(&"u_atmosphere_height", _atmosphere_height)
 	_update_cull_margin()
 
 
@@ -246,7 +246,7 @@ func _set_mode(mode: int):
 	else:
 		if OS.is_stdout_verbose():
 			print("Switching ", name, " to far mode")
-		mat.set_shader_parameter("u_clip_mode", 0.0)
+		mat.set_shader_parameter(&"u_clip_mode", 0.0)
 		_mesh_instance.mesh = _far_mesh
 
 
