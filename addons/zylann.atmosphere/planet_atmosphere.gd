@@ -56,6 +56,7 @@ var _near_mesh : QuadMesh
 var _mode := MODE_FAR
 var _mesh_instance : MeshInstance3D
 var _prev_atmo_clip_distance : float = 0.0
+var _uses_baked_optical_depth := false
 
 var _optical_depth_baker : OpticalDepthBaker
 var _optical_depth_texture : Texture2D
@@ -71,6 +72,10 @@ const _api_shader_params = {
 	"u_blue_noise_texture": true,
 	"u_cloud_coverage_rotation": true,
 	"u_optical_depth_texture": true
+}
+
+const _shader_params_affecting_optical_depth = {
+	"u_density": true
 }
 
 
@@ -122,18 +127,22 @@ func set_custom_shader(shader: Shader):
 				shader.code = DefaultShader.code
 	
 	var uniforms := _custom_shader.get_shader_uniform_list()
-	var needs_optical_depth := false
 	for uniform in uniforms:
 		if uniform.name == "u_optical_depth_texture":
-			needs_optical_depth = true
+			_uses_baked_optical_depth = true
 			break
 	
-	if needs_optical_depth:
-		if _optical_depth_baker == null:
-			_optical_depth_baker = OpticalDepthBaker.new()
-			add_child(_optical_depth_baker)
-			_optical_depth_baker.baked.connect(_on_optical_depth_baked)
-		_optical_depth_baker.request_bake(mat)
+	if _uses_baked_optical_depth:
+		_request_bake_optical_depth()
+
+
+func _request_bake_optical_depth():
+	var mat := _get_material()
+	if _optical_depth_baker == null:
+		_optical_depth_baker = OpticalDepthBaker.new()
+		add_child(_optical_depth_baker)
+		_optical_depth_baker.baked.connect(_on_optical_depth_baked)
+	_optical_depth_baker.request_bake(mat)
 
 
 func _on_optical_depth_baked(tex: Texture2D):
@@ -188,6 +197,8 @@ func _set(p_key: StringName, value):
 		var param_name := key.substr(len("shader_params/"))
 		var mat := _get_material()
 		mat.set_shader_parameter(param_name, value)
+		if _uses_baked_optical_depth and _shader_params_affecting_optical_depth.has(param_name):
+			_request_bake_optical_depth()
 
 
 func _get_configuration_warnings() -> PackedStringArray:
@@ -206,6 +217,8 @@ func set_planet_radius(new_radius: float):
 	var sm : ShaderMaterial = _mesh_instance.material_override
 	sm.set_shader_parameter(&"u_planet_radius", _planet_radius)
 	_update_cull_margin()
+	if _uses_baked_optical_depth:
+		_request_bake_optical_depth()
 
 
 func _update_cull_margin():
@@ -219,6 +232,8 @@ func set_atmosphere_height(new_height: float):
 	var sm : ShaderMaterial = _mesh_instance.material_override
 	sm.set_shader_parameter(&"u_atmosphere_height", _atmosphere_height)
 	_update_cull_margin()
+	if _uses_baked_optical_depth:
+		_request_bake_optical_depth()
 
 
 func set_sun_path(new_sun_path: NodePath):
