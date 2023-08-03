@@ -38,6 +38,8 @@ The atmosphere version with scattering was based on [Sebastian Lague's Coding Ad
 
 ### Clouds
 
+![screen2](https://zylannprods.fr/images/godot/plugins/atmosphere/screen3.png)
+
 Some shaders have volumetric clouds. They are quite expensive so tradeoffs had to be used. They are imperfect at the moment, but maybe in the future they can be made better as Godot gets more rendering APIs to help with post-processing effects.
 
 Clouds need a coverage cubemap to work well, otherwise by default they cover the whole atmosphere uniformly. The plugin comes with a `NoiseCubemap` custom resource. It is similar to `NoiseTexture`, except it generates on a cubemap, which can be applied to a sphere seamlessly, without pinching at the poles.
