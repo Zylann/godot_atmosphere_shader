@@ -96,14 +96,9 @@ func _init():
 	_update_cull_margin()
 
 	# Setup defaults for the builtin shader
-	# This is a workaround for https://github.com/godotengine/godot/issues/24488
-	material.set_shader_parameter(&"u_day_color0", Color(0.29, 0.39, 0.92))
-	material.set_shader_parameter(&"u_day_color1", Color(0.76, 0.90, 1.0))
-	material.set_shader_parameter(&"u_night_color0", Color(0.15, 0.10, 0.33))
-	material.set_shader_parameter(&"u_night_color1", Color(0.0, 0.0, 0.0))
-	material.set_shader_parameter(&"u_density", 0.2)
 	material.set_shader_parameter(&"u_sun_position", Vector3(5000, 0, 0))
 	material.set_shader_parameter(&"u_blue_noise_texture", BlueNoiseTexture)
+	material.set_shader_parameter(&"u_clip_mode", 0.0)
 
 
 func _ready():
@@ -111,7 +106,6 @@ func _ready():
 	# Must assign those in _ready because they are set by the scene loader, after _init
 	mat.set_shader_parameter(&"u_planet_radius", _planet_radius)
 	mat.set_shader_parameter(&"u_atmosphere_height", _atmosphere_height)
-	mat.set_shader_parameter(&"u_clip_mode", 0.0)
 
 
 func set_custom_shader(shader: Shader):
@@ -182,7 +176,10 @@ func _get(p_key: StringName):
 	if key.begins_with("shader_params/"):
 		var param_name = key.substr(len("shader_params/"))
 		var mat := _get_material()
-		return mat.get_shader_parameter(param_name)
+		var value = mat.get_shader_parameter(param_name)
+		if value == null:
+			value = RenderingServer.shader_get_parameter_default(mat.shader, param_name)
+		return value
 
 
 func _set(p_key: StringName, value):
