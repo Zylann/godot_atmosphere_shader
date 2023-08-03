@@ -134,7 +134,6 @@ shader_params/u_cloud_density_scale = 2.0
 shader_params/u_cloud_bottom = 0.2
 shader_params/u_cloud_top = 0.6
 shader_params/u_cloud_blend = 0.5
-shader_params/u_sphere_depth_factor = 0.0
 shader_params/u_cloud_shape_texture = SubResource("NoiseTexture3D_8p07x")
 shader_params/u_cloud_coverage_cubemap = SubResource("Cubemap_7kyfx")
 
@@ -146,7 +145,7 @@ speed = 20.0
 [node name="Camera" type="Camera3D" parent="Avatar"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.357289, 0.105603, 1.49554)
 near = 0.1
-far = 500.0
+far = 800.0
 script = ExtResource("3")
 
 [node name="Clouds" type="MeshInstance3D" parent="."]
