@@ -4,6 +4,7 @@ Atmosphere shader for Godot Engine 4
 This contains a simple atmosphere shader usable on planets. I developped this for a tech demo I'm working on, so I thought of making it an addon.
 
 ![screen1](https://user-images.githubusercontent.com/1311555/107590266-9ffe2e80-6bff-11eb-83af-33c25ce3f0a8.png)
+![screen2](https://zylannprods.fr/images/godot/plugins/atmosphere/screen2.png)
 
 - Comes in two versions, one with fake colors and another with light scattering
 - Can be seen from inside like regular fog if you want to land on the planet
