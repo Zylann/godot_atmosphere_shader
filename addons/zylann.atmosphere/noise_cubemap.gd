@@ -50,7 +50,7 @@ var _update_scheduled := false
 
 func _init():
 	# Hack to have it working by default when created in the inspector...
-	_noise = FastNoiseLite.new()
+	noise = FastNoiseLite.new()
 	_request_update()
 
 
