@@ -11,8 +11,6 @@ This contains a simple atmosphere shader usable on planets. I developped this fo
 - Switches to a cube mesh when seen from far away so multiple atmospheres can be drawn at lower cost
 - Includes experimental volumetric clouds
 
-I'm interested in having a realistic version of the shader but it's not a priority at the moment.
-
 
 How to use
 -----------
