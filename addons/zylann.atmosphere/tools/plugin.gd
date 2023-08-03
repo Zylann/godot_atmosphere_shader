@@ -1,7 +1,7 @@
 @tool
 extends EditorPlugin
 
-const NoiseCubemap = preload("../noise_cubemap.gd")
+#const NoiseCubemap = preload("../noise_cubemap.gd")
 const NoiseCubemapInspectorPlugin = preload("./noise_cubemap_inspector_plugin.gd")
 
 
@@ -11,7 +11,12 @@ var _noise_cubemap_to_save : NoiseCubemap
 
 
 func _enter_tree():
-	# Have to add custom type because `class_name` is ignored under res://addons/...
+	# Using `add_custom_type` alone, it appears in New Resource dialog, 
+	# but doesn't appear in the resource dropdowns.
+	# Using `class_name` alone, it appears in the resource dropdowns,
+	# but doesn't appear in the New Resource dialog.
+	# Oh well, let's use both I guess :/
+	# https://github.com/godotengine/godot/issues/75245
 	add_custom_type("NoiseCubemap", "Cubemap", NoiseCubemap, null)
 	
 	_noise_cubemap_inspector_plugin = NoiseCubemapInspectorPlugin.new()

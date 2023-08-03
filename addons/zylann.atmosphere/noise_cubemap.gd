@@ -1,4 +1,5 @@
 @tool
+class_name NoiseCubemap
 extends Cubemap
 
 # Procedural cubemap projecting 3D noise. It is mostly meant as a tool to prototype, and once a
