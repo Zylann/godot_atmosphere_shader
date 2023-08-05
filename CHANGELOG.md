@@ -5,6 +5,17 @@ This is a high-level changelog for each released versions of the plugin.
 For a more detailed list of past and incoming changes, see the commit history.
 
 
+0.4
+------
+
+- Added `force_fullscreen` option to allow previewing the inside of the atmosphere in the editor
+- Added atmosphere ambient color to v2 atmosphere so nights are no longer pitch black
+- Added `*_shader_parameter()` methods, deprecated `*_shader_param` methods
+- Slightly improved clouds alpha blending
+- Decoupled alpha from color in v2 atmosphere so it no longer stops rendering in the dark side of planets
+- Fixed properties list not updating when setting a different shader
+
+
 0.3
 ----
 
