@@ -51,6 +51,8 @@ var _custom_shader : Shader
 # In degrees per second
 @export var clouds_rotation_speed : float = 1.0
 
+@export var force_fullscreen := false
+
 var _far_mesh : BoxMesh
 var _near_mesh : QuadMesh
 var _mode := MODE_FAR
@@ -292,7 +294,7 @@ func _process(_delta):
 	# we always switch modes while already being slightly away from the quad, to avoid flickering
 	var d := global_transform.origin.distance_to(cam_pos)
 	var is_near := d < atmo_clip_distance
-	if is_near:
+	if is_near or force_fullscreen:
 		_set_mode(MODE_NEAR)
 	else:
 		_set_mode(MODE_FAR)
