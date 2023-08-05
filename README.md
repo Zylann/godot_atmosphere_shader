@@ -28,11 +28,12 @@ The plugin has several shader variants in `res://addons/zylann.atmosphere/shader
 
 - `planet_atmosphere_v1_no_clouds.gdshader`: original faked atmosphere
 - `planet_atmosphere_v1_clouds.gdshader`: original faked atmosphere with volumetric clouds
+- `planet_atmosphere_v1_clouds_high.gdshader`: original faked atmosphere with better-quality volumetric clouds, but more expensive
 - `planet_atmosphere_no_clouds.gdshader`: atmosphere with scattering
 - `planet_atmosphere_clouds.gdshader`: atmosphere with scattering and volumetric clouds
 - `planet_atmosphere_clouds_high.gdshader`: atmosphere with scattering and better-quality volumetric clouds, but more expensive
 - `planet_atmosphere_clouds_high_m.gdshader`: atmosphere with scattering with volumetric clouds using raymarched lighting, even more expensive
-- `optical_depth.gdshader`: This shader is for internal use, it should not be assigned in the atmposphere node.
+- `optical_depth.gdshader`: This shader is for internal use, it should not be assigned in the atmosphere node.
 
 The atmosphere version with scattering was based on [Sebastian Lague's Coding Adventure](https://www.youtube.com/watch?v=dzcFB_9xHtg), with some help from [ProceduralPlanetGodot](https://github.com/athillion/ProceduralPlanetGodot).
 
@@ -46,4 +47,4 @@ Clouds need a coverage cubemap to work well, otherwise by default they cover the
 
 ### Known issues
 
-- The effect will stop rendering when getting to close to the planet in the editor. This is because the script can't access the camera of the main 3D viewport. It should work fine in game. One workaround is to force clip mode in `res://addons/zylann.atmosphere/shaders/include/planet_atmosphere_main.gdshaderinc` in `atmosphere_vertex()`.
+- The effect will stop rendering when getting close to the planet in the editor. This is because the script can't access the camera of the main 3D viewport. It should work fine in game. To workaround this, enable `force_fullscreen`, and turn it back off once you're done tweaking.
