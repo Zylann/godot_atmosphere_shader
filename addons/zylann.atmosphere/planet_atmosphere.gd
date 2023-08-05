@@ -160,11 +160,23 @@ func _get_material() -> ShaderMaterial:
 	return _mesh_instance.material_override as ShaderMaterial
 
 
+# TODO Obsolete
 func set_shader_param(param_name: String, value):
+	push_warning("set_shader_param is deprecated, use set_shader_parameter")
+	set_shader_parameter(param_name, value)
+
+
+# TODO Obsolete
+func get_shader_param(param_name: String):
+	push_warning("get_shader_param is deprecated, use get_shader_parameter")
+	return get_shader_parameter(param_name)
+
+
+func set_shader_parameter(param_name: StringName, value):
 	_get_material().set_shader_parameter(param_name, value)
 
 
-func get_shader_param(param_name: String):
+func get_shader_parameter(param_name: StringName):
 	return _get_material().get_shader_parameter(param_name)
 
 
