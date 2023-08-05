@@ -115,6 +115,7 @@ func _ready():
 
 func set_custom_shader(shader: Shader):
 	_custom_shader = shader
+	
 	var mat := _get_material()
 	if _custom_shader == null:
 		mat.shader = DefaultShader
@@ -134,6 +135,8 @@ func set_custom_shader(shader: Shader):
 	
 	if _uses_baked_optical_depth:
 		_request_bake_optical_depth()
+
+	notify_property_list_changed()
 
 
 func _request_bake_optical_depth():
