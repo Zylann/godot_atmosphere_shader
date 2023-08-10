@@ -44,12 +44,6 @@
 //#define CLOUDS_RAYMARCHED_LIGHTING
 #include "cloud_funcs.gdshaderinc"
 
-uniform float u_cloud_density_scale = 50.0;
-uniform float u_cloud_bottom = 0.2;
-uniform float u_cloud_top = 0.5;
-uniform float u_cloud_blend = 0.5;
-uniform mat4 u_world_to_model_matrix;
-
 #endif // CLOUDS_ENABLED
 
 uniform bool u_clip_mode = false;
@@ -168,81 +162,8 @@ void atmosphere_fragment(
 		out_alpha = atmosphere.a;
 
 #ifdef CLOUDS_ENABLED
-		float clouds_bottom = u_planet_radius + u_cloud_bottom * u_atmosphere_height;
-		float clouds_top = u_planet_radius + u_cloud_top * u_atmosphere_height;
-		
-		vec2 rs_clouds_top = ray_sphere(
-			in_v_planet_center_viewspace, clouds_top, ray_origin, ray_dir);
-		
-		if (rs_clouds_top.x != rs_clouds_top.y) {
-			vec2 rs_clouds_bottom = 
-				ray_sphere(in_v_planet_center_viewspace, clouds_bottom, ray_origin, ray_dir);
-			
-			vec2 cloud_rs = rs_clouds_top;
-			cloud_rs.x = max(cloud_rs.x, 0.0);
-			cloud_rs.y = min(cloud_rs.y, linear_depth);
-			
-			if (cloud_rs.x < linear_depth 
-				// Don't compute clouds when opaque stuff occludes them,
-				// when under the clouds layer.
-				// This saves 0.5ms in ground views on a 1060
-				&& (linear_depth > rs_clouds_bottom.y || rs_clouds_bottom.x > 0.0)
-			) {
-				// When under the cloud layer, this improves quality significantly,
-				// unfortunately entering the cloud layer causes a jarring transition
-//				if (rs_clouds_bottom.x < 0.0) {
-//					cloud_rs.x = rs_clouds_bottom.y;
-//				}
-				
-				mat4 view_to_model_matrix = u_world_to_model_matrix * inv_view_matrix;
-				vec3 ray_origin_world = (view_to_model_matrix * vec4(ray_origin, 1.0)).xyz;
-				vec3 ray_dir_world = (view_to_model_matrix * vec4(ray_dir, 0.0)).xyz;
-				vec3 sun_dir_world = (view_to_model_matrix * vec4(sun_dir, 0.0)).xyz;
-				
-				CloudSettings cloud_settings;
-				cloud_settings.bottom_height = clouds_bottom;
-				cloud_settings.top_height = clouds_top;
-				cloud_settings.density_scale = u_cloud_density_scale;
-				cloud_settings.ground_height = u_planet_radius;
-				
-				vec2 cloud_rr = raymarch_cloud(
-					ray_origin_world, ray_dir_world, cloud_rs.x, cloud_rs.y, jitter, sun_dir_world,
-					TIME, cloud_settings);
-				
-				vec3 cloud_albedo = vec3(cloud_rr.x);
-				float cloud_alpha = cloud_rr.y;
-				
-				// Experimental blend between atmosphere and clouds...
-				// Ideally we could raymarch both at once, but might be more expensive?
-//				ALBEDO = mix(ALBEDO, cloud_albedo, cloud_alpha);
-//				out_albedo = mix(
-//					mix(out_albedo, cloud_albedo, cloud_alpha),
-//					out_albedo + cloud_albedo * cloud_alpha,
-//					u_cloud_blend);
-//				out_alpha = max(out_alpha, cloud_alpha);
-				
-				vec4 alpha_blended = blend_colors(
-					vec4(out_albedo, out_alpha),
-					vec4(cloud_albedo, cloud_alpha)
-				);
-				
-				vec4 add_blended = vec4(
-					out_albedo + cloud_albedo * cloud_alpha,
-					max(out_alpha, cloud_alpha));
-				
-				// This could be used in a script to workaround the fact cloud opacity doesn't take
-				// atmosphere opacity into account when raymarching
-//				float height_ratio = clamp(
-//					(length(ray_origin_world) - u_planet_radius) / u_atmosphere_height, 0.0, 1.0);
-//				float cloud_blend = mix(0.6, 0.2, hr);
-				
-				vec4 result = mix(alpha_blended, add_blended, u_cloud_blend);
-				
-				out_albedo = result.rgb;
-				out_alpha = result.a;
-			}
-			// TODO
-		}
+		render_clouds(out_albedo, out_alpha, in_v_planet_center_viewspace, ray_origin, ray_dir,
+			linear_depth, inv_view_matrix, sun_dir, jitter);
 #endif // CLOUDS_ENABLED
 		
 		out_discard = false;
