@@ -72,7 +72,7 @@ void atmosphere_vertex(
 ) {
 	// Note:
 	// When the camera is far enough, we should actually move the quad to be on top of the planet,
-	// and not in front of the near plane, because otherwise it's harder to layer two 
+	// and not in front of the near plane, because otherwise it's harder to layer two
 	// atmospheres on screen and have them properly sorted. Besides, it could reduce pixel cost.
 	// So this is an option.
 	if (u_clip_mode) {
@@ -83,10 +83,10 @@ void atmosphere_vertex(
 		out_position = projection_matrix * modelview_matrix * vec4(vertex, 1.0);
 		// Billboard doesn't actually work well
 		//VERTEX.z += 1.0;
-		//MODELVIEW_MATRIX = INV_CAMERA_MATRIX * 
+		//MODELVIEW_MATRIX = INV_CAMERA_MATRIX *
 		//	mat4(CAMERA_MATRIX[0],CAMERA_MATRIX[1],CAMERA_MATRIX[2],WORLD_MATRIX[3]);
 	}
-	
+
 	vec4 world_pos = model_matrix * vec4(0, 0, 0, 1);
 	out_v_planet_center_viewspace = (view_matrix * world_pos).xyz;
 	out_v_sun_center_viewspace = (view_matrix * vec4(u_sun_position, 1.0)).xyz;
@@ -116,33 +116,33 @@ void atmosphere_fragment(
 	vec3 cam_pos_world = (inv_view_matrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
 	// I wonder if there is a faster way to get to that distance...
 	float linear_depth = distance(cam_pos_world, pos_world);
-	
+
 	// We'll evaluate the atmosphere in view space
 	vec3 ray_origin = vec3(0.0, 0.0, 0.0);
 	vec3 ray_dir = normalize(view_coords.xyz - ray_origin);
-	
+
 	float atmosphere_radius = u_planet_radius + u_atmosphere_height;
 	vec2 rs_atmo = ray_sphere(in_v_planet_center_viewspace, atmosphere_radius, ray_origin, ray_dir);
-	
+
 	// TODO if we run this shader in a double-clip scenario,
 	// we have to account for the near and far clips properly, so they can be composed seamlessly
-	
+
 	if (rs_atmo.x != rs_atmo.y) {
 		float t_begin = max(rs_atmo.x, 0.0);
 		float t_end = max(rs_atmo.y, 0.0);
-		
-		vec2 rs_ground = 
+
+		vec2 rs_ground =
 			ray_sphere(in_v_planet_center_viewspace, u_planet_radius, ray_origin, ray_dir);
 		float gd = 10000000.0;
 		if (rs_ground.x != rs_ground.y) {
 			gd = rs_ground.x;
 		}
 		linear_depth = mix(linear_depth, gd, u_sphere_depth_factor);
-		
+
 		t_end = min(t_end, linear_depth);
 
 		vec3 sun_dir = normalize(in_v_sun_center_viewspace - v_planet_center_viewspace);
-		
+
 		// Blue noise doesn't have low-frequency patterns, it looks less "noisy"
 		// http://momentsingraphics.de/BlueNoise.html
 		vec2 jitter_uv = viewport_size * screen_uv;// + vec2(TIME*1000.0, 0);
@@ -157,7 +157,7 @@ void atmosphere_fragment(
 		vec4 atmosphere = compute_atmosphere_v2(ray_origin, ray_dir, in_v_planet_center_viewspace,
 			t_begin, t_end, linear_depth, sun_dir, jitter);
 #endif
-		
+
 		out_albedo = atmosphere.rgb;
 		out_alpha = atmosphere.a;
 
@@ -165,9 +165,9 @@ void atmosphere_fragment(
 		render_clouds(out_albedo, out_alpha, in_v_planet_center_viewspace, ray_origin, ray_dir,
 			linear_depth, inv_view_matrix, sun_dir, jitter);
 #endif // CLOUDS_ENABLED
-		
+
 		out_discard = false;
-		
+
 	} else {
 		// DEBUG
 		//ALPHA = 0.2;
