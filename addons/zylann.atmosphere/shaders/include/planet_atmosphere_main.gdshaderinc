@@ -17,6 +17,7 @@
 //#define CLOUDS_ENABLED
 //#endif
 //#define ATMOSPHERE_LITE
+//#define REVERSE_Z
 
 #ifdef ATMOSPHERE_LITE
 #include "atmosphere_funcs_v1.gdshaderinc"
@@ -76,7 +77,12 @@ void atmosphere_vertex(
 	// atmospheres on screen and have them properly sorted. Besides, it could reduce pixel cost.
 	// So this is an option.
 	if (u_clip_mode) {
+#ifdef REVERSE_Z
+		// https://godotengine.org/article/introducing-reverse-z/
+		out_position = vec4(vertex.xy, 1.0, 1.0);
+#else
 		out_position = vec4(vertex, 1.0);
+#endif
 	} else {
 		// Godot expects us to fill in `POSITION` if we mention it at all in `vertex()`,
 		// so we have to set it in the `else` block too otherwise nothing will show up
