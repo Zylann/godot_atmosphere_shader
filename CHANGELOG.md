@@ -4,6 +4,12 @@ Changelog
 This is a high-level changelog for each released versions of the plugin.
 For a more detailed list of past and incoming changes, see the commit history.
 
+0.5 (dev)
+------
+
+- Enabled reverse-Z handling by default, so Godot 4.3 or later is preferred onwards.
+- `NoiseCubemap` data is no longer saved to the resource file. This was unnecessary because the texture is procedural.
+
 
 0.4
 ------
