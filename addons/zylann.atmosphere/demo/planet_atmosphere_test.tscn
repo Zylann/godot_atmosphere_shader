@@ -52,7 +52,6 @@ frequency = 0.1
 fractal_type = 2
 fractal_octaves = 8
 fractal_gain = 0.665
-cellular_jitter = 1.0
 
 [sub_resource type="NoiseTexture3D" id="NoiseTexture3D_8p07x"]
 seamless = true
