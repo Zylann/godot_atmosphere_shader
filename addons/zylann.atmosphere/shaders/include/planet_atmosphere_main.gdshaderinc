@@ -21,6 +21,9 @@
 // If you use Godot 4.2 or older, you may comment this out
 #define REVERSE_Z
 
+// If you use a double-precision build, you may enable this.
+//#define DOUBLE_PRECISION
+
 #ifdef ATMOSPHERE_LITE
 #include "atmosphere_funcs_v1.gdshaderinc"
 #else
@@ -112,6 +115,15 @@ void atmosphere_fragment(
 	out float out_alpha,
 	out bool out_discard,
 ) {
+#ifdef DOUBLE_PRECISION
+	// TODO In double-precision builds, Godot negates the origin of INV_VIEW_MATRIX
+	// It's unclear why.
+	// See https://github.com/godotengine/godot/pull/93108
+	inv_view_matrix[3][0] *= -1.0;
+	inv_view_matrix[3][1] *= -1.0;
+	inv_view_matrix[3][2] *= -1.0;
+#endif
+
 	// TODO Is depth texture really needed in the end?
 	float nonlinear_depth = texture(depth_texture, screen_uv).x;
 	// Note, we assume Vulkan here, which has NDC in 0..1 (OpenGL is -1..1)
