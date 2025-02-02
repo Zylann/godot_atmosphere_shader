@@ -24,4 +24,3 @@ float get_atmosphere_density(float height) {
 }
 
 #endif // ATMOSPHERE_COMMON_INCLUDED
-

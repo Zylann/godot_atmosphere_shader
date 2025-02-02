@@ -195,4 +195,3 @@ void atmosphere_fragment(
 		out_discard = true;
 	}
 }
-
