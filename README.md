@@ -1,5 +1,5 @@
-Atmosphere shader for Godot Engine 4
-====================================
+Atmosphere shader for Godot Engine 4.3+
+=======================================
 
 This contains a simple atmosphere shader usable on planets. I developped this for a tech demo I'm working on, so I thought of making it an addon.
 
@@ -48,3 +48,7 @@ Clouds need a coverage cubemap to work well, otherwise by default they cover the
 ### Known issues
 
 - The effect will stop rendering when getting close to the planet in the editor. This is because the script can't access the camera of the main 3D viewport. It should work fine in game. To workaround this, enable `force_fullscreen`, and turn it back off once you're done tweaking.
+
+- If you use Godot 4.2 or older, the atmosphere won't render properly. 4.3 broke compatibility when introducing reverse-Z depth, but didn't provide macros to test for it directly in the shader. So it was decided to bump support of the plugin from 4.3 onwards. To workaround that in older versions, comment out the `REVERSE_Z` macro inside `shaders/include/planet_atmosphere_main.gdshaderinc`.
+
+- If you use a build of Godot with double-precision, [there is an inconsistency](https://github.com/godotengine/godot/pull/93108) with `INV_VIEW_MATRIX` which causes clouds to not render properly. To workaround this, enable the `DOUBLE_PRECISION` macro inside `shaders/include/planet_atmosphere_main.gdshaderinc`.
