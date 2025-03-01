@@ -1,0 +1,9 @@
+[gd_scene load_steps=3 format=3 uid="uid://bjpkhdmke2die"]
+
+[ext_resource type="Script" path="res://temporal_rendering/test_temporal_rendering_atmo.gd" id="1_fd2j0"]
+[ext_resource type="PackedScene" uid="uid://gc7xwxp74opt" path="res://addons/zylann.atmosphere/demo/planet_atmosphere_test.tscn" id="2_0iu6h"]
+
+[node name="Node" type="Node"]
+script = ExtResource("1_fd2j0")
+
+[node name="Spatial" parent="." instance=ExtResource("2_0iu6h")]

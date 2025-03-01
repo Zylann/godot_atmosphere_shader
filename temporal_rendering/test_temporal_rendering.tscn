@@ -1,0 +1,41 @@
+[gd_scene load_steps=8 format=3 uid="uid://rhyct2jdfqo5"]
+
+[ext_resource type="Script" path="res://temporal_rendering/test_temporal_rendering.gd" id="1_2kbpe"]
+[ext_resource type="PackedScene" uid="uid://cltgsnrutmgt8" path="res://addons/zylann.atmosphere/demo/flying_avatar.tscn" id="2_v25s7"]
+[ext_resource type="Shader" path="res://temporal_rendering/display_result.gdshader" id="3_8df6q"]
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_7cvhr"]
+sky_top_color = Color(0.568627, 0.698039, 0.807843, 1)
+sky_horizon_color = Color(0.672549, 0.704902, 0.734314, 1)
+ground_bottom_color = Color(0.121569, 0.121569, 0.129412, 1)
+ground_horizon_color = Color(0.672549, 0.704902, 0.734314, 1)
+
+[sub_resource type="Sky" id="Sky_72i0n"]
+sky_material = SubResource("ProceduralSkyMaterial_7cvhr")
+
+[sub_resource type="Environment" id="Environment_r2ari"]
+background_mode = 2
+sky = SubResource("Sky_72i0n")
+tonemap_mode = 2
+glow_enabled = true
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_bp5u8"]
+shader = ExtResource("3_8df6q")
+
+[node name="Node" type="Node"]
+script = ExtResource("1_2kbpe")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_r2ari")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(-0.866023, -0.433016, 0.250001, 0, 0.499998, 0.866027, -0.500003, 0.749999, -0.43301, 0, 0, 0)
+shadow_enabled = true
+directional_shadow_max_distance = 250.0
+
+[node name="Avatar" parent="." instance=ExtResource("2_v25s7")]
+
+[node name="TextureRect" type="TextureRect" parent="."]
+material = SubResource("ShaderMaterial_bp5u8")
+offset_right = 40.0
+offset_bottom = 40.0

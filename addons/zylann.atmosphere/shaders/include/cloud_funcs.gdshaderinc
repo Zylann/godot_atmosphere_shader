@@ -2,6 +2,11 @@
 #include "util.gdshaderinc"
 #include "planet_common.gdshaderinc"
 
+// Development purposes
+//#ifndef CLOUDS_TEMPORAL
+//#define CLOUDS_TEMPORAL
+//#endif
+
 uniform float u_cloud_density_scale = 50.0;
 uniform float u_cloud_bottom = 0.2;
 uniform float u_cloud_top = 0.5;
@@ -14,6 +19,15 @@ uniform float u_cloud_shape_factor = 0.8;
 uniform float u_cloud_shape_scale = 1.0;
 uniform samplerCube u_cloud_coverage_cubemap;
 uniform mat2 u_cloud_coverage_rotation;
+#ifdef CLOUDS_USE_DETAIL
+uniform float u_cloud_detail_scale = 3.0;
+uniform float u_cloud_detail_animation_speed = 0.01;
+#endif
+
+// TODO Don't define useless uniforms in case of temporal result rendering
+#ifdef CLOUDS_TEMPORAL
+uniform sampler2D u_cloud_temporal_buffer : repeat_disable;
+#endif
 
 struct CloudSettings {
 	float bottom_height;
@@ -29,7 +43,7 @@ float height_curve(float x) {
 }
 
 float get_density_full(vec3 pos_world, float time, CloudSettings settings, bool low) {
-#ifdef CLOUDS_ALWAYS_LOW_QUALITY
+#ifndef CLOUDS_USE_DETAIL
 	low = true;
 #endif
 
@@ -49,11 +63,14 @@ float get_density_full(vec3 pos_world, float time, CloudSettings settings, bool 
 		texture(u_cloud_shape_texture, pos_world * u_cloud_shape_scale).r,
 		u_cloud_shape_factor);
 
-	// If we could do temporal rendering, this would actually sample a detail texture.
-	// For now it is mostly unused.
+#ifdef CLOUDS_USE_DETAIL
 	float detail = low ? 0.5 : texture(
-		u_cloud_shape_texture, pos_world * 15.0 + vec3(time * 0.01)).r;
-	
+		u_cloud_shape_texture, pos_world * u_cloud_detail_scale
+		 + vec3(u_cloud_detail_animation_speed * time)).r;
+#else
+	float detail = 0.5;
+#endif
+
 	if (u_cloud_shape_invert == 1.0) {
 		shape = 1.0 - shape;
 	}
@@ -172,12 +189,15 @@ float get_light(vec3 pos, vec3 ray_dir, vec3 sun_dir, float jitter, float alpha,
 #define CLOUDS_MAX_RAYMARCH_STEPS 8
 #endif
 
+// Returns
+// x: color
+// y: alpha
 vec2 raymarch_cloud(vec3 ray_origin, vec3 ray_dir, float t_begin, float t_end, float jitter,
-	vec3 sun_dir, float time, CloudSettings settings) {
-	
+	vec3 sun_dir, float time, CloudSettings settings, out float out_depth) {
+
 	const int steps = CLOUDS_MAX_RAYMARCH_STEPS;
 //	int steps = min(int((t_end - t_begin) / 0.005) + 1, CLOUDS_MAX_RAYMARCH_STEPS);
-	
+
 	// This is a hack limiting marching distance to increase horizon quality at certain heights.
 	// Without it, horizon peers too much through the cloud layer when seen from space.
 	// So we cut off how far we march, and gradually increase it as we descend through the clouds.
@@ -212,6 +232,9 @@ vec2 raymarch_cloud(vec3 ray_origin, vec3 ray_dir, float t_begin, float t_end, f
 	float alpha = 0.0;
 	vec3 pos = ray_origin + jitter * step_len * ray_dir + ray_dir * t_begin;
 
+	float depth = 0.0;
+	const float depth_alpha_threshold = 0.1;
+
 	for (int i = 0; i < steps; ++i) {
 		float light = get_light(pos, ray_dir, sun_dir, jitter, alpha, time, settings);
 		float density = get_density(pos, time, settings);
@@ -233,6 +256,10 @@ vec2 raymarch_cloud(vec3 ray_origin, vec3 ray_dir, float t_begin, float t_end, f
 //			break;
 //		}
 
+		if (alpha < depth_alpha_threshold) {
+			depth += step_len;
+		}
+
 		pos += ray_dir * step_len;// * transmittance;
 	}
 
@@ -241,9 +268,23 @@ vec2 raymarch_cloud(vec3 ray_origin, vec3 ray_dir, float t_begin, float t_end, f
 //	total_light = 1.0;
 //	alpha += coverage * (1.0 - alpha);
 
+	out_depth = depth;
 	return vec2(total_light, alpha);
 //	return vec2(total_transmittance, clamp(total_light, 0.0, 1.0));
 //	return vec2(1.0-exp(-total_density), total_light * inv_steps);
+}
+
+vec4 blend_clouds(vec4 cloud, vec4 src) {
+	vec4 alpha_blended = blend_colors(src, cloud);
+	vec4 add_blended = vec4(src.rgb + cloud.rgb * cloud.a, max(src.a, cloud.a));
+
+	// This could be used in a script to workaround the fact cloud opacity doesn't take
+	// atmosphere opacity into account when raymarching
+//				float height_ratio = clamp(
+//					(length(ray_origin_world) - u_planet_radius) / u_atmosphere_height, 0.0, 1.0);
+//				float cloud_blend = mix(0.6, 0.2, hr);
+
+	return mix(alpha_blended, add_blended, u_cloud_blend);
 }
 
 void render_clouds(
@@ -293,10 +334,11 @@ void render_clouds(
 			cloud_settings.density_scale = u_cloud_density_scale;
 			cloud_settings.ground_height = u_planet_radius;
 
+			float unused_depth;
 			vec2 cloud_rr = raymarch_cloud(
 				ray_origin_world, ray_dir_world, cloud_rs.x, cloud_rs.y, jitter, sun_dir_world,
-				TIME, cloud_settings);
-			
+				TIME, cloud_settings, unused_depth);
+
 			vec3 cloud_albedo = vec3(cloud_rr.x);
 			float cloud_alpha = cloud_rr.y;
 
@@ -319,10 +361,89 @@ void render_clouds(
 
 			out_albedo = result.rgb;
 			out_alpha = result.a;
+			
+			//out_albedo = vec3(1.0, 0.0, 0.0);
+			//out_alpha = 1.0;
 		}
 	}
 }
 
+// Returns (color, alpha) where color is grayscale
+// TODO Return depth estimation too
+vec3 render_clouds_data(
+	vec3 in_v_planet_center_viewspace,
+	vec3 ray_origin,
+	vec3 ray_dir,
+	float linear_depth,
+	mat4 inv_view_matrix,
+	vec3 sun_dir,
+	float jitter
+) {
+	float clouds_bottom = u_planet_radius + u_cloud_bottom * u_atmosphere_height;
+	float clouds_top = u_planet_radius + u_cloud_top * u_atmosphere_height;
+
+	vec2 rs_clouds_top = ray_sphere(in_v_planet_center_viewspace, clouds_top, ray_origin, ray_dir);
+
+	if (rs_clouds_top.x != rs_clouds_top.y) {
+		vec2 rs_clouds_bottom =
+			ray_sphere(in_v_planet_center_viewspace, clouds_bottom, ray_origin, ray_dir);
+
+		vec2 cloud_rs = rs_clouds_top;
+		cloud_rs.x = max(cloud_rs.x, 0.0);
+		cloud_rs.y = min(cloud_rs.y, linear_depth);
+
+		if (cloud_rs.x < linear_depth
+			// Don't compute clouds when opaque stuff occludes them,
+			// when under the clouds layer.
+			// This saves 0.5ms in ground views on a 1060
+			&& (linear_depth > rs_clouds_bottom.y || rs_clouds_bottom.x > 0.0)
+		) {
+			mat4 view_to_model_matrix = u_world_to_model_matrix * inv_view_matrix;
+			vec3 ray_origin_world = (view_to_model_matrix * vec4(ray_origin, 1.0)).xyz;
+			vec3 ray_dir_world = (view_to_model_matrix * vec4(ray_dir, 0.0)).xyz;
+			vec3 sun_dir_world = (view_to_model_matrix * vec4(sun_dir, 0.0)).xyz;
+
+			CloudSettings cloud_settings;
+			cloud_settings.bottom_height = clouds_bottom;
+			cloud_settings.top_height = clouds_top;
+			cloud_settings.density_scale = u_cloud_density_scale;
+			cloud_settings.ground_height = u_planet_radius;
+
+			float depth = 0.0;
+			vec2 cloud_rr = raymarch_cloud(
+				ray_origin_world, ray_dir_world, cloud_rs.x, cloud_rs.y, jitter, sun_dir_world,
+				TIME, cloud_settings, depth);
+
+			// Normalize depth so it fits in the output image
+			depth /= cloud_rs.y - cloud_rs.x;
+
+			return vec3(cloud_rr, depth);
+		}
+	}
+
+	return vec3(0.0);
+}
+
+#ifdef CLOUDS_TEMPORAL
+
+void render_clouds_from_temporal_buffer(
+	inout vec3 out_albedo,
+	inout float out_alpha,
+	vec2 screen_uv,
+	float linear_depth,
+	vec3 ray_origin,
+	vec3 ray_dir
+) {
+	vec2 cloud = texture(u_cloud_temporal_buffer, vec2(screen_uv.x, 1.0 - screen_uv.y)).rg;
+	cloud.r = pow2(cloud.r);
+//	cloud.g = pow2(cloud.g);
+	// TODO Perform depth corrections
+	vec4 result = blend_clouds(vec4(vec3(cloud.r), cloud.g), vec4(out_albedo, out_alpha));
+	out_albedo = result.rgb;
+	out_alpha = result.a;
+}
+
+#endif
 
 // rs1: inner sphere
 // rs2: outer sphere

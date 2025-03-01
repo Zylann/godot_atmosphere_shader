@@ -32,21 +32,6 @@
 
 #ifdef CLOUDS_ENABLED
 
-// We can't crank up parameters to values that would make clouds look really good...
-// If we do, framerate tanks too much.
-// Tip: turns out FXAA helps reducing noise a little.
-//
-// We could use temporal rendering, which cannot be done for clouds that we can fly through and
-// can intersect geometry, because it needs rendering features Godot isn't exposing yet.
-// The idea is to use the technique described in 2015 by Guerilla Games in Horizon Zero Dawn.
-// We need two extra render targets, each having access to the depth buffer of the current frame,
-// and the depth buffer of the previous frame in order to implement more advanced workarounds to
-// temporal artifacts.
-// But in 2023 Guerilla Games is going to present an even more recent advancement in their
-// atmosphere tech at SIGGRAPH so technically we're almost two orders behind^^" (although their
-// announced method seems to rely more on baked data and doesn't seem fit for planets)
-//
-#define CLOUDS_ALWAYS_LOW_QUALITY
 //#define CLOUDS_RAYMARCHED_LIGHTING
 #include "cloud_funcs.gdshaderinc"
 
@@ -182,8 +167,13 @@ void atmosphere_fragment(
 		out_alpha = atmosphere.a;
 
 #ifdef CLOUDS_ENABLED
+#ifdef CLOUDS_TEMPORAL
+		render_clouds_from_temporal_buffer(out_albedo, out_alpha, screen_uv, linear_depth,
+			ray_origin, ray_dir);
+#else
 		render_clouds(out_albedo, out_alpha, in_v_planet_center_viewspace, ray_origin, ray_dir,
 			linear_depth, inv_view_matrix, sun_dir, jitter);
+#endif
 #endif // CLOUDS_ENABLED
 
 		out_discard = false;
