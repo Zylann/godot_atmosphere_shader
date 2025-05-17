@@ -1,9 +1,8 @@
-[gd_scene load_steps=23 format=3 uid="uid://gc7xwxp74opt"]
+[gd_scene load_steps=19 format=3 uid="uid://gc7xwxp74opt"]
 
 [ext_resource type="Texture2D" uid="uid://dtlptku1k7pm1" path="res://addons/zylann.atmosphere/demo/space_background.webp" id="1_j5n0u"]
 [ext_resource type="PackedScene" uid="uid://c36velgas3n3k" path="res://addons/zylann.atmosphere/planet_atmosphere.tscn" id="2"]
 [ext_resource type="Shader" path="res://addons/zylann.atmosphere/shaders/planet_atmosphere_clouds.gdshader" id="3_ra2pw"]
-[ext_resource type="Texture2D" uid="uid://cvcg66612wjvw" path="res://tests/2k_earth_clouds.png" id="4"]
 [ext_resource type="Script" path="res://addons/zylann.atmosphere/noise_cubemap.gd" id="4_8lw7l"]
 [ext_resource type="PackedScene" uid="uid://cltgsnrutmgt8" path="res://addons/zylann.atmosphere/demo/flying_avatar.tscn" id="5_td3mm"]
 
@@ -69,27 +68,6 @@ noise = SubResource("FastNoiseLite_16ssy")
 resolution = 256
 scale = Vector3(100, 200, 100)
 
-[sub_resource type="Shader" id="4"]
-code = "shader_type spatial;
-render_mode blend_mix,depth_draw_opaque,cull_back,diffuse_burley,specular_schlick_ggx;
-uniform sampler2D texture_albedo : source_color;
-
-void fragment() {
-	vec2 base_uv = UV;
-	vec4 albedo_tex = texture(texture_albedo,base_uv);
-	ALBEDO = albedo_tex.rgb;
-	ALPHA = albedo_tex.r;
-	//EMISSION = vec3(0.2,0.2,0.2);
-}
-"
-
-[sub_resource type="ShaderMaterial" id="5"]
-render_priority = 0
-shader = SubResource("4")
-shader_parameter/texture_albedo = ExtResource("4")
-
-[sub_resource type="SphereMesh" id="6"]
-
 [sub_resource type="BoxMesh" id="BoxMesh_ortma"]
 size = Vector3(10, 30, 10)
 
@@ -137,12 +115,6 @@ shader_params/u_cloud_coverage_cubemap = SubResource("Cubemap_7kyfx")
 
 [node name="Avatar" parent="." instance=ExtResource("5_td3mm")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 156.425)
-
-[node name="Clouds" type="MeshInstance3D" parent="."]
-transform = Transform3D(1.02, 0, 0, 0, 1.02, 0, 0, 0, 1.02, 0, 0, 0)
-visible = false
-material_override = SubResource("5")
-mesh = SubResource("6")
 
 [node name="Cube" type="MeshInstance3D" parent="."]
 transform = Transform3D(0.737148, 0.662773, 0.131701, 2.23517e-08, 0.194902, -0.980823, -0.675732, 0.723011, 0.143672, 74.2016, 13.2348, 80.2044)
