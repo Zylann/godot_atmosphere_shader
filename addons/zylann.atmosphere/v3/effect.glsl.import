@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://dfgxvvxmqhiod"
+path="res://.godot/imported/effect.glsl-bfd906d3456832e266a3811a9425a28a.res"
+
+[deps]
+
+source_file="res://addons/zylann.atmosphere/v3/effect.glsl"
+dest_files=["res://.godot/imported/effect.glsl-bfd906d3456832e266a3811a9425a28a.res"]
+
+[params]
+
