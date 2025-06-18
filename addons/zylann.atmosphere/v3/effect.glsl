@@ -1,11 +1,10 @@
 #[compute]
 #version 450
 
-// #include "inc.glsl"
-
-#define CLOUDS_RAYMARCHED_LIGHTING
+// #define CLOUDS_RAYMARCHED_LIGHTING
 // #define CLOUDS_ALWAYS_LOW_QUALITY
-#define CLOUDS_MAX_RAYMARCH_STEPS 32
+#define CLOUDS_MAX_RAYMARCH_STEPS 24
+#define CLOUDS_MAX_RAYMARCH_FSTEPS 4
 #define CLOUDS_LIGHT_RAYMARCH_STEPS 6
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
@@ -126,10 +125,8 @@ struct CloudSettings {
     float blend;
 };
 
-float height_curve(float x) {
-//	float a = 1.0 - pow4(x - 1.0);
-//	return 1.0 - pow2(2.0 * a - 1.0);
-	return 1.0 - pow2(2.0 * x - 1.0);
+float qband(float x, float c, float w) {
+	return clamp(1.0 - pow2(2.0 * (x - c) / w), 0.0, 1.0);
 }
 
 float get_density_full(vec3 pos_world, float time, CloudSettings settings, bool low) {
@@ -140,31 +137,31 @@ float get_density_full(vec3 pos_world, float time, CloudSettings settings, bool 
 	float height = length(pos_world) - settings.bottom_height;
 	float height_ratio = height / (settings.top_height - settings.bottom_height);
 
-	float height_curve_value = max(height_curve(height_ratio), 0.0);
-	float density = 1.0;
+	if (height_ratio < 0.0 || height_ratio > 1.0) {
+		return 0.0;
+	}
 
-	//float coverage = texture(u_cloud_shape_texture, pos_world * 0.2 + vec3(time * 0.001)).r;
 	vec2 coverage_pos_2d = settings.coverage_rotation * pos_world.xz;
 	vec3 coverage_pos = vec3(coverage_pos_2d.x, pos_world.y, coverage_pos_2d.y);
 	float coverage = texture(u_cloud_coverage_cubemap, coverage_pos).r;
-	coverage = coverage - 0.25 * height_ratio + settings.coverage_bias;
-
-	float shape = mix(0.5, texture(u_cloud_shape_texture, pos_world * settings.shape_scale).r, settings.shape_factor);
-
-	// If we could do temporal rendering, this would actually sample a detail texture.
-	// For now it is mostly unused.
-	float detail = low ? 0.5 : texture(
-		u_cloud_shape_texture, pos_world * 15.0 + vec3(time * 0.01)).r;
+	coverage = clamp(coverage + settings.coverage_bias, 0.0, 1.0);
+	// coverage = qband(height_ratio, 0.5, 0.5) * coverage;
 	
+	if (coverage <= 0.0) {
+		return 0.0;
+	}
+
+	if (low) {
+		return coverage;
+	}
+
+	vec3 shape_uv = pos_world * settings.shape_scale + vec3(time*0.1, 0.0, 0.0);
+	float shape = texture(u_cloud_shape_texture, shape_uv).r * settings.shape_factor;
 	if (settings.shape_invert == 1.0) {
 		shape = 1.0 - shape;
 	}
-
-	density = (shape - 0.2 * detail + (mix(-1.2, 1.5, coverage))) * height_curve_value;
-	density = density * 50.0 - 20.0;
-
-	density = clamp(density, 0.0, 1.0);
-//	density += 0.05;
+	
+	float density = max(coverage - shape, 0.0);
 
 	return density;
 }
@@ -178,92 +175,42 @@ float get_density(vec3 pos_world, float time, CloudSettings settings) {
 }
 
 float get_planet_shadow(vec3 pos, float planet_radius, vec3 sun_dir) {
-//	vec2 rs = ray_sphere(vec3(0.0), planet_radius, pos, sun_dir);
-//	if (rs.x == rs.y || (rs.y < 0.0 && rs.x < 0.0)) {
-//		return 0.0;
-//	}
-//	float shadow_sharpness = 2.0;
-//	float shadow = min((1.0+shadow_sharpness) * (rs.y - rs.x) / (2.0 * planet_radius), 1.0);
-
-//	float dp = clamp(dot(normalize(pos), -sun_dir) + 0.6, 0.0, 1.0);
-	float dp = smoothstep(-0.3, 0.3, dot(normalize(pos), -sun_dir));
-
-	return dp;
+	float dp = clamp(dot(normalize(pos), sun_dir) * 1.0 + 0.25, 0.0, 1.0);
+	return dp * dp;
 }
 
-float get_light_cheap(vec3 pos_world, vec3 ray_dir, vec3 sun_dir, float alpha, CloudSettings settings) {
-	float height = length(pos_world) - settings.bottom_height;
-	float height_ratio = height / (settings.top_height - settings.bottom_height);
-	float light = height_ratio;//clamp(pos_tex.z, 0.0, 1.0);
-	float dp = dot(ray_dir, sun_dir);
-	return light
-		// Sun peering through
-		+ max(pow(dp, 16.0), 0.0)*(1.0-alpha);
-}
-
-float get_light_raymarched(vec3 pos0, vec3 sun_dir, float jitter, float alpha0,
-	float time, CloudSettings settings) {
-
+float get_light_raymarched(
+		vec3 pos0, 
+		vec3 sun_dir, 
+		float jitter, // TODO Use jitter?
+		float time, 
+		CloudSettings settings
+) {
 	const int steps = CLOUDS_LIGHT_RAYMARCH_STEPS;
-	float reach = (settings.top_height - settings.bottom_height) * 0.15;
-//	const float cone_dispersion = 0.2;
-
-	float pos0_height = length(pos0) - settings.bottom_height;
-	float pos0_height_ratio = pos0_height / (settings.top_height - settings.bottom_height);
+	float reach = (settings.top_height - settings.bottom_height) * 0.5;
 
 	float inv_steps = 1.0 / float(steps);
 	float step_len = reach * inv_steps;
-	//pos0 += sun_dir * jitter * step_len;
 
-	float alpha = 0.0;
+	pos0 += sun_dir * (step_len * jitter);
 
+	float total_density = 0.0;
+	
 	for (int i = 0; i < steps; ++i) {
-		//vec3 random_vec = 2.0 * vec3(hash(pos.x), hash(pos.y), hash(pos.z)) - 1.0;
-//		vec3 random_vec = 2.0 * texture(u_random_vectors_texture,
-//			vec2(jitter, float(i) * inv_steps)).rgb - 1.0;
-//		random_vec = vec3(0.0);
+		vec3 pos = pos0 + float(i + 1) * step_len * sun_dir;
 
-//		vec3 dir = normalize(mix(sun_dir, random_vec, cone_dispersion));
-		vec3 dir = sun_dir;
-
-		vec3 pos = pos0 + float(i) * step_len * dir;
-
-		float density;
-		if (alpha0 < 0.3) {
-			density = get_density(pos, time, settings);
-		} else {
-			density = get_density_low(pos, time, settings);
-		}
-//		density = 0.0;
-		density *= step_len * settings.density_scale;
-
-		// TODO Check equation
-		float transmittance = exp(-density);
-		alpha += (1.0 - transmittance) * (1.0 - alpha);
-		step_len *= 1.2;
+		float density = get_density_low(pos, time, settings);
+		total_density += density * step_len;
 	}
 
-	float light0 = pos0_height_ratio * 0.2;
+	float light_density_scale = 1.0;
+	total_density *= settings.density_scale * light_density_scale;
 
-	// TODO Have more light close to the sun
-//	return mix(1.0, light0, alpha);
-	return mix(1.0, light0, alpha);
-}
+	float transmittance = exp(-total_density);
 
-float get_light(vec3 pos, vec3 ray_dir, vec3 sun_dir, float jitter, float alpha, float time,
-	CloudSettings settings) {
+	transmittance *= get_planet_shadow(pos0, settings.ground_height, sun_dir);
 
-#ifdef CLOUDS_RAYMARCHED_LIGHTING
-	float light = get_light_raymarched(pos, sun_dir, jitter, alpha, time, settings);
-#else
-	float light = get_light_cheap(pos, ray_dir, sun_dir, alpha, settings);
-#endif
-
-	float shadow_amount = get_planet_shadow(pos, 1.0, sun_dir);
-
-	light = light * mix(1.0, 0.002, shadow_amount);
-
-	return light;
+	return transmittance;
 }
 
 #ifndef CLOUDS_MAX_RAYMARCH_STEPS
@@ -272,7 +219,16 @@ float get_light(vec3 pos, vec3 ray_dir, vec3 sun_dir, float jitter, float alpha,
 #define CLOUDS_MAX_RAYMARCH_STEPS 8
 #endif
 
-vec2 raymarch_cloud(
+#ifndef CLOUDS_MAX_RAYMARCH_FSTEPS
+#define CLOUDS_MAX_RAYMARCH_FSTEPS 1
+#endif
+
+struct CloudResult {
+	float transmittance;
+	float light;
+};
+
+CloudResult raymarch_cloud(
 	vec3 ray_origin, // in planet space
 	vec3 ray_dir, 
 	float t_begin, 
@@ -283,79 +239,57 @@ vec2 raymarch_cloud(
 	CloudSettings settings
 ) {
 	const int steps = CLOUDS_MAX_RAYMARCH_STEPS;
-//	int steps = min(int((t_end - t_begin) / 0.005) + 1, CLOUDS_MAX_RAYMARCH_STEPS);
-	
-	// This is a hack limiting marching distance to increase horizon quality at certain heights.
-	// Without it, horizon peers too much through the cloud layer when seen from space.
-	// So we cut off how far we march, and gradually increase it as we descend through the clouds.
-	// So the worst case scenario is now while being inside the clouds, which is better than having
-	// that discrepancy all the time
-	float march_distance_space =
-		0.5 * sqrt(
-			1.0 - pow2(settings.ground_height / settings.top_height)
-		) * settings.bottom_height;
-	float march_distance_ground = 3.0 * march_distance_space;
-	float march_distance_transition_height_min = settings.bottom_height;
-	float march_distance_transition_height_max = settings.top_height * 1.05;
-
-	float max_d = mix(
-		march_distance_ground,
-		march_distance_space,
-		smoothstep(
-			march_distance_transition_height_min,
-			march_distance_transition_height_max,
-			length(ray_origin)
-		)
-	);
-
-	t_end = t_begin + min(t_end - t_begin, max_d);
 
 	float inv_steps = 1.0 / float(steps);
 	float step_len = (t_end - t_begin) * inv_steps;
-//	float step_len_base = step_len;
 
 	float total_transmittance = 1.0;
 	float total_light = 0.0;
-	float alpha = 0.0;
+
 	vec3 pos = ray_origin + jitter * step_len * ray_dir + ray_dir * t_begin;
+	float phase = 1.0; // ?
+
+	const int fsteps = CLOUDS_MAX_RAYMARCH_FSTEPS;
+	float fstep_len = step_len / float(fsteps);
 
 	for (int i = 0; i < steps; ++i) {
-		float light = get_light(pos, ray_dir, sun_dir, jitter, alpha, time, settings);
-		float density = get_density(pos, time, settings);
+		float density = get_density_low(pos, time, settings);
+		
+		if (density > 0.0) {
+			pos -= ray_dir * step_len;
 
-		density *= settings.density_scale;
+			for (int j = 0; j < fsteps; ++j) {
+				float density2 = get_density(pos, time, settings);
 
-		float transmittance =  exp(-density * step_len);
-		total_transmittance *= transmittance;
-		total_transmittance = max(total_transmittance, 0.005);
+				if (density2 > 0.0) {
+					float light_transmittance = get_light_raymarched(pos, sun_dir, jitter, time, settings);
+					total_light += density2 * fstep_len * total_transmittance * light_transmittance * phase;
 
-//		total_light += total_transmittance * light;
-		total_light += light * density * step_len * total_transmittance;
+					density2 *= settings.density_scale;
+					float step_transmittance = exp(-density2 * fstep_len);
+					total_transmittance *= step_transmittance;
 
-		alpha += (1.0 - transmittance) * (1.0 - alpha);
+					if (total_transmittance < 0.01) {
+						break;
+					}
+				}
 
-		// This helps a bit with large and variable step count,
-		// but impacts performance with small fixed step count
-//		if (alpha > 0.99) {
-//			break;
-//		}
+				pos += ray_dir * fstep_len;
+			}
 
-		pos += ray_dir * step_len;// * transmittance;
+			if (total_transmittance < 0.01) {
+				break;
+			}
+		}
+
+		pos += ray_dir * step_len;
 	}
 
-//	float coverage = texture(u_cloud_coverage_cubemap, ray_origin +  ray_dir * original_t_end).r;
-//	coverage = clamp((coverage + u_cloud_coverage_bias - 0.5) * 4.0, 0.0, 1.0);
-//	total_light = 1.0;
-//	alpha += coverage * (1.0 - alpha);
-
-	return vec2(total_light, alpha);
-//	return vec2(total_transmittance, clamp(total_light, 0.0, 1.0));
-//	return vec2(1.0-exp(-total_density), total_light * inv_steps);
+	return CloudResult(total_transmittance, total_light);
 }
 
 void render_clouds(
-	inout vec3 out_albedo,
-	inout float out_alpha,
+	inout vec4 inout_color,
 	vec3 planet_center_viewspace,
 	vec3 ray_origin,
 	vec3 ray_dir,
@@ -384,22 +318,16 @@ void render_clouds(
 		) {
 			// When under the cloud layer, this improves quality significantly,
 			// unfortunately entering the cloud layer causes a jarring transition
-//				if (rs_clouds_bottom.x < 0.0) {
-//					cloud_rs.x = rs_clouds_bottom.y;
-//				}
+			// if (rs_clouds_bottom.x < 0.0) {
+			// 	cloud_rs.x = rs_clouds_bottom.y;
+			// }
 
 			mat4 view_to_model_matrix = world_to_model_matrix * inv_view_matrix;
 			vec3 ray_origin_model = (view_to_model_matrix * vec4(ray_origin, 1.0)).xyz;
 			vec3 ray_dir_model = (view_to_model_matrix * vec4(ray_dir, 0.0)).xyz;
 			vec3 sun_dir_model = (view_to_model_matrix * vec4(sun_dir_viewspace, 0.0)).xyz;
 
-			// CloudSettings cloud_settings;
-			// cloud_settings.bottom_height = clouds_bottom;
-			// cloud_settings.top_height = clouds_top;
-			// cloud_settings.density_scale = u_cloud_density_scale;
-			// cloud_settings.ground_height = u_planet_radius;
-
-			vec2 cloud_rr = raymarch_cloud(
+			CloudResult rr = raymarch_cloud(
 				ray_origin_model, 
                 ray_dir_model, 
                 cloud_rs.x, 
@@ -409,29 +337,10 @@ void render_clouds(
 				time, 
                 cloud_settings
             );
-			
-			vec3 cloud_albedo = vec3(cloud_rr.x);
-			float cloud_alpha = cloud_rr.y;
 
-			vec4 alpha_blended = blend_colors(
-				vec4(out_albedo, out_alpha),
-				vec4(cloud_albedo, cloud_alpha)
-			);
-
-			vec4 add_blended = vec4(
-				out_albedo + cloud_albedo * cloud_alpha,
-				max(out_alpha, cloud_alpha));
-
-			// This could be used in a script to workaround the fact cloud opacity doesn't take
-			// atmosphere opacity into account when raymarching
-//				float height_ratio = clamp(
-//					(length(ray_origin_world) - u_planet_radius) / u_atmosphere_height, 0.0, 1.0);
-//				float cloud_blend = mix(0.6, 0.2, hr);
-
-			vec4 result = mix(alpha_blended, add_blended, cloud_settings.blend);
-
-			out_albedo = result.rgb;
-			out_alpha = result.a;
+			vec3 light_color = vec3(1.0, 1.0, 1.0);
+			vec3 cloud_color = rr.light * light_color;
+			inout_color.rgb = inout_color.rgb * rr.transmittance + cloud_color;
 		}
 	}
 }
@@ -479,8 +388,7 @@ void main() {
 	// TODO if we run this shader in a double-clip scenario,
 	// we have to account for the near and far clips properly, so they can be composed seamlessly
 
-    vec3 albedo = vec3(0.0);
-    float alpha = 0.0;
+    vec4 color = imageLoad(u_color_image, fragcoord);
 
 	if (rs_atmo.x != rs_atmo.y) {
 		float t_begin = max(rs_atmo.x, 0.0);
@@ -505,10 +413,13 @@ void main() {
             u_pc_params.sun_center_viewspace.xyz - u_pc_params.planet_center_viewspace.xyz
         );
 
+		float time = u_pc_params.time;
+
 		// Blue noise doesn't have low-frequency patterns, it looks less "noisy"
 		// http://momentsingraphics.de/BlueNoise.html
-		float jitter = texelFetch(u_blue_noise_texture, fragcoord & ivec2(0xff), 0).r;
+		float jitter = texelFetch(u_blue_noise_texture, (fragcoord + ivec2(time * 100.0)) & ivec2(0xff), 0).r;
 //		jitter = 0.0;
+		// jitter = fract(time);
 
 		// vec4 atmosphere = compute_atmosphere_v2(ray_origin, ray_dir, in_v_planet_center_viewspace,
 		// 	t_begin, t_end, linear_depth, sun_dir, jitter);
@@ -529,8 +440,7 @@ void main() {
         cloud_settings.blend =              u_params.cloud_blend;
 
         render_clouds(
-            albedo, 
-            alpha, 
+			color,
             u_pc_params.planet_center_viewspace.xyz,
             ray_origin,
             ray_dir,
@@ -539,13 +449,11 @@ void main() {
             u_params.world_to_model_matrix,
             sun_dir_viewspace,
             jitter,
-            u_pc_params.time,
+            time,
             cloud_settings
         );
 	}
 	// float nonlinear_depth = texture(u_depth_texture, screen_uv).x;
 
-    vec4 color = imageLoad(u_color_image, fragcoord);
-    color = blend_colors(color, vec4(albedo, alpha));
     imageStore(u_color_image, fragcoord, color);
 }
