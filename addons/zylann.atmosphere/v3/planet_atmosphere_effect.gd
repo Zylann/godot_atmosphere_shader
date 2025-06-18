@@ -103,6 +103,7 @@ func _notification(what: int) -> void:
 func _update_shader() -> bool:
 	if not _dirty:
 		return true
+	_dirty = false
 	
 	# Does any of this actually need mutex lock?
 	
