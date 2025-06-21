@@ -5,10 +5,41 @@ extends CompositorEffect
 # Refs:
 # https://www.youtube.com/watch?v=hqhWR0CxZHA
 
-# Pass 1: render clouds at quarter resolution
-# Pass 2: upscale clouds
-# Pass 3: blur clouds
-# Pass 4: blend clouds
+@export_group("Atmosphere")
+@export var model_transform := Transform3D()
+@export var planet_radius := 100.0
+@export var atmosphere_height := 20.0
+
+@export_group("Light sources")
+@export var sun_direction := Vector3(0.0, -1.0, 0.0)
+
+@export_group("Clouds height", "clouds")
+@export_range(0.0, 1.0, 0.001) var clouds_bottom := 0.3
+@export_range(0.0, 1.0, 0.001) var clouds_top := 1.0
+@export var clouds_density_scale := 25.0
+
+@export_group("Clouds light", "clouds")
+@export var clouds_light_density_scale := 1.0
+@export_range(0.0, 2.0, 0.1) var clouds_light_reach := 1.0
+
+@export_group("Clouds coverage", "clouds")
+@export_range(0.0, 1.0) var clouds_coverage_factor := 1.0
+@export var clouds_coverage_bias := -0.2
+#var cloud_coverage_rotation_x := Vector2(1.0, 0.0)
+
+@export_group("Clouds shape", "clouds")
+@export var clouds_shape_enabled := true
+@export_range(0.0, 1.0) var clouds_shape_factor := 0.6
+@export var clouds_shape_bias := 0.0
+@export var clouds_shape_scale := 0.05
+@export_range(0.0, 1.0) var clouds_shape_amount := 0.5
+
+@export_group("Clouds detail", "clouds")
+@export var clouds_detail_enabled := true
+@export_range(0.0, 1.0) var clouds_detail_factor := 0.6
+@export var clouds_detail_bias := 0.0
+@export var clouds_detail_scale := 0.05
+@export_range(0.0, 1.0) var clouds_detail_amount := 0.5
 
 var _dirty : bool = true
 var _mutex : Mutex
@@ -22,7 +53,7 @@ var _params_ubo : RID
 var _cam_params_ubo : RID
 
 const _shader_file = preload("./effect.glsl")
-const _cloud_coverage_cubemap = preload("res://tests/cloud_coverage.png")
+const _cloud_coverage_cubemap = preload("res://tests/cloud_coverage_2.png")
 const _cloud_shape_texture = \
 	preload("res://addons/zylann.atmosphere/demo/cloud_shape_texture3d.tres")
 const _blue_noise_texture = preload("res://addons/zylann.atmosphere/blue_noise.png")
@@ -152,10 +183,12 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 	var scene_data := p_render_data.get_render_scene_data()
 	var camera_transform := scene_data.get_cam_transform()
 	var world_to_view := camera_transform.inverse()
-	var planet_center_world := Vector3()
-	var planet_center_viewspace := world_to_view * planet_center_world
+	var planet_center_viewspace := world_to_view * model_transform.origin
 	var sphere_depth_factor := 0.0
-	var sun_center_world := Vector3(0.0, 1000.0, 0.0)
+	
+	# TODO Sun should be a direction
+	var sun_center_world := \
+		model_transform.origin - sun_direction * (2.0*(planet_radius + atmosphere_height))
 	var sun_center_viewspace := world_to_view * sun_center_world
 	
 	# Faster than UBO but typically limited in size (128 bytes minimum).
@@ -177,9 +210,20 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 	push_constant.push_back(sun_center_viewspace.z)
 	push_constant.push_back(0.0)
 	
+	var coverage_rotation_x := Vector2(1.0, 0.0)
+	push_constant.push_back(coverage_rotation_x.x)
+	push_constant.push_back(coverage_rotation_x.y)
+	push_constant.push_back(0.0)
+	push_constant.push_back(0.0)
+	
 	var cam_params_f32 := _make_camera_params_f32(scene_data)
 	var cam_params_bytes := cam_params_f32.to_byte_array()
 	_rd.buffer_update(_cam_params_ubo, 0, cam_params_bytes.size(), cam_params_bytes)
+	
+	# TODO Do this only if changed
+	var params_f32 := _make_params_f32()
+	var params_bytes := params_f32.to_byte_array()
+	_rd.buffer_update(_params_ubo, 0, params_bytes.size(), params_bytes)
 	
 	# # Loop through views just in case we're doing stereo rendering.
 	var view_count := render_scene_buffers.get_view_count()
@@ -259,41 +303,34 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 
 
 func _make_params_f32() -> PackedFloat32Array:
-	var world_to_model := Transform3D()
-	var planet_radius := 100.0
-	var atmosphere_height := 20.0
-	var cloud_density_scale := 50.0
-	var cloud_bottom := 0.2
-	var cloud_top := 0.5
-	var cloud_blend := 0.5
-	var cloud_shape_invert := 0.0
-	var cloud_coverage_bias := 0.0
-	var cloud_coverage_rotation_x := Vector2(1.0, 0.0)
-	var cloud_coverage_rotation_y := Vector2(0.0, 1.0)
-	var cloud_shape_factor := 0.5
-	var cloud_shape_scale := 0.1
+	var world_to_model := model_transform.inverse()
 	
 	var params_f32 := PackedFloat32Array()
 	_encode_transform_to_mat4(params_f32, world_to_model)
 
-	params_f32.append(cloud_coverage_rotation_x.x)
-	params_f32.append(cloud_coverage_rotation_x.y)
-	params_f32.append(cloud_coverage_rotation_y.x)
-	params_f32.append(cloud_coverage_rotation_y.y)
-
 	params_f32.append(planet_radius)
 	params_f32.append(atmosphere_height)
-	params_f32.append(cloud_density_scale)
-	params_f32.append(cloud_bottom)
-	params_f32.append(cloud_top)
-	params_f32.append(cloud_blend)
-	params_f32.append(cloud_coverage_bias)
-	params_f32.append(cloud_shape_invert)
-	params_f32.append(cloud_shape_factor)
-	params_f32.append(cloud_shape_scale)
+	params_f32.append(clouds_density_scale)
+	params_f32.append(clouds_light_density_scale)
+	params_f32.append(clouds_light_reach)
+	params_f32.append(clouds_bottom)
+	params_f32.append(clouds_top)
+	params_f32.append(clouds_coverage_factor)
+	params_f32.append(clouds_coverage_bias)
+	params_f32.append(clouds_shape_factor if clouds_shape_enabled else 0.0)
+	params_f32.append(clouds_shape_bias)
+	params_f32.append(clouds_shape_scale)
+	params_f32.append(clouds_shape_amount)
+	params_f32.append(clouds_detail_factor if clouds_detail_enabled else 0.0)
+	params_f32.append(clouds_detail_bias)
+	params_f32.append(clouds_detail_scale)
+	params_f32.append(clouds_detail_amount)
 	
 	params_f32.append(0.0)
 	params_f32.append(0.0)
+	params_f32.append(0.0)
+	
+	#assert(params_f32.size() % 16 == 0)
 	
 	return params_f32
 

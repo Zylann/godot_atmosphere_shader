@@ -3,7 +3,7 @@
 
 // #define CLOUDS_RAYMARCHED_LIGHTING
 // #define CLOUDS_ALWAYS_LOW_QUALITY
-#define CLOUDS_MAX_RAYMARCH_STEPS 24
+#define CLOUDS_MAX_RAYMARCH_STEPS 32
 #define CLOUDS_MAX_RAYMARCH_FSTEPS 4
 #define CLOUDS_LIGHT_RAYMARCH_STEPS 6
 
@@ -24,25 +24,32 @@ layout(binding = 4) uniform sampler2D u_blue_noise_texture;
 // Parameters that don't change every frame
 layout (binding = 5) uniform Params {
     mat4 world_to_model_matrix;
-    // mat2 cloud_coverage_rotation; // Appears to use 64 bytes for some goddamn reason
-    // TODO Could probably get away with a single vector, we can get Y with 90-degree rotation
-    // TODO Also move this to dynamic params since it could change every frame
-    vec2 cloud_coverage_rotation_x;
-    vec2 cloud_coverage_rotation_y;
-
-    float planet_radius;
+    
+	float planet_radius;
     float atmosphere_height;
 
-    float cloud_density_scale;// = 50.0;
+    float cloud_density_scale;// = 1.0;
+	float cloud_light_density_scale;
+	float cloud_light_reach;
     float cloud_bottom;// = 0.2; // In ratio of atmosphere height
     float cloud_top;// = 0.5; // In ratio of atmosphere height
-    float cloud_blend;// = 0.5;
-    float cloud_coverage_bias;// = 0.0;
-    float cloud_shape_invert;// = 0.0;
-    float cloud_shape_factor;// = 0.8;
-    float cloud_shape_scale;// = 1.0;
 
-    vec2 reserved;
+	float cloud_coverage_factor;
+	float cloud_coverage_bias;
+	
+    float cloud_shape_factor;// = 0.5;
+    float cloud_shape_bias;// = 0.0;
+    float cloud_shape_scale;// = 1.0;
+	float cloud_shape_amount;// = 1.0;
+
+    float cloud_detail_factor;// = 0.5;
+    float cloud_detail_bias;// = 0.0;
+    float cloud_detail_scale;// = 1.0;
+	float cloud_detail_amount;// = 1.0;
+
+	float reserved0;
+	float reserved1;
+	float reserved2;
 } u_params;
 
 // Camera
@@ -51,13 +58,19 @@ layout (binding = 6) uniform CamParams {
     mat4 inv_projection_matrix;
 } u_cam_params;
 
-// Parameters that change every frame
+// Parameters that may change every frame
 layout(push_constant, std430) uniform PcParams {
     vec2 raster_size; // 0..7
     float time; // 8..11
-    float reserved; // 12..15
+    float reserved0; // 12..15
+
     vec4 planet_center_viewspace; // 16..31 // w contains sphere_depth_factor
+
     vec4 sun_center_viewspace; // 32..47 // w is not used
+
+    vec2 cloud_coverage_rotation_x; // 48..55
+    float reserved1; // 56..59
+    float reserved2; // 60..63
 } u_pc_params;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -91,6 +104,10 @@ float pow2(float x) {
     return x * x;
 }
 
+float pow4(float x) {
+    return x * x * x * x;
+}
+
 vec4 blend_colors(vec4 background, vec4 foreground) {
 	float sa = 1.0 - foreground.a;
 	float a = background.a * sa + foreground.a;
@@ -106,6 +123,10 @@ vec4 blend_colors(vec4 background, vec4 foreground) {
 	}
 }
 
+vec2 vec2_rotate_90(vec2 v) {
+	return vec2(-v.y, v.x);
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Clouds
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -113,27 +134,46 @@ vec4 blend_colors(vec4 background, vec4 foreground) {
 // Settings carried around in cloud functions.
 // We don't use uniforms directly to make the code a bit more portable.
 struct CloudSettings {
+	float ground_height;
 	float bottom_height;
 	float top_height;
+
 	float density_scale;
-	float ground_height;
+	float light_density_scale;
+	float light_reach;
+
     mat2 coverage_rotation;
+    float coverage_factor;
     float coverage_bias;
+
+	float shape_factor;
+	float shape_bias;
     float shape_scale;
-    float shape_factor;
-    float shape_invert;
-    float blend;
+	float shape_amount;
+
+	float detail_factor;
+	float detail_bias;
+	float detail_scale;
+	float detail_amount;
 };
 
-float qband(float x, float c, float w) {
+float pand_p2(float x, float c, float w) {
 	return clamp(1.0 - pow2(2.0 * (x - c) / w), 0.0, 1.0);
 }
 
-float get_density_full(vec3 pos_world, float time, CloudSettings settings, bool low) {
-#ifdef CLOUDS_ALWAYS_LOW_QUALITY
-	low = true;
-#endif
+float band_p4(float x, float c, float w) {
+	return clamp(1.0 - pow4(2.0 * (x - c) / w), 0.0, 1.0);
+}
 
+float band_p2s_unit(float x, float s) {
+	return max(1.0 - pow2(max((abs(x) - 1.0 + s) / s, 0.0)), 0.0);
+}
+
+float band_p2s(float x, float w, float s) {
+	return band_p2s_unit(x / w, s);
+}
+
+float get_density(vec3 pos_world, float time, CloudSettings settings, int quality) {
 	float height = length(pos_world) - settings.bottom_height;
 	float height_ratio = height / (settings.top_height - settings.bottom_height);
 
@@ -144,39 +184,43 @@ float get_density_full(vec3 pos_world, float time, CloudSettings settings, bool 
 	vec2 coverage_pos_2d = settings.coverage_rotation * pos_world.xz;
 	vec3 coverage_pos = vec3(coverage_pos_2d.x, pos_world.y, coverage_pos_2d.y);
 	float coverage = texture(u_cloud_coverage_cubemap, coverage_pos).r;
-	coverage = clamp(coverage + settings.coverage_bias, 0.0, 1.0);
-	// coverage = qband(height_ratio, 0.5, 0.5) * coverage;
+	coverage = clamp(coverage * settings.coverage_factor + settings.coverage_bias, 0.0, 1.0);
+	coverage = band_p2s_unit(height_ratio * 2.0 - 1.0, 0.5) * coverage;
 	
 	if (coverage <= 0.0) {
 		return 0.0;
 	}
 
-	if (low) {
+	if (quality == 0) {
 		return coverage;
 	}
 
-	vec3 shape_uv = pos_world * settings.shape_scale + vec3(time*0.1, 0.0, 0.0);
-	float shape = texture(u_cloud_shape_texture, shape_uv).r * settings.shape_factor;
-	if (settings.shape_invert == 1.0) {
-		shape = 1.0 - shape;
+	vec3 shape_uv = pos_world * settings.shape_scale + vec3(time*0.01, 0.0, 0.0);
+	float shape = texture(u_cloud_shape_texture, shape_uv).r;
+	shape = shape * settings.shape_factor + settings.shape_bias;
+
+	float density = max(coverage - shape * settings.shape_amount, 0.0);
+	if (density <= 0.0) {
+		return 0.0;
 	}
-	
-	float density = max(coverage - shape, 0.0);
+
+	if (quality == 1) {
+		return density;
+	}
+
+	vec3 detail_uv = pos_world * settings.detail_scale + vec3(time*0.005, 0.0, 0.0);
+	float detail = texture(u_cloud_shape_texture, detail_uv).r;
+	detail = detail * settings.detail_factor + settings.detail_bias;
+
+	density = max(density - detail * settings.detail_amount, 0.0);
 
 	return density;
 }
 
-float get_density_low(vec3 pos_world, float time, CloudSettings settings) {
-	return get_density_full(pos_world, time, settings, true);
-}
-
-float get_density(vec3 pos_world, float time, CloudSettings settings) {
-	return get_density_full(pos_world, time, settings, false);
-}
-
 float get_planet_shadow(vec3 pos, float planet_radius, vec3 sun_dir) {
-	float dp = clamp(dot(normalize(pos), sun_dir) * 1.0 + 0.25, 0.0, 1.0);
+	float dp = clamp(dot(normalize(pos), sun_dir) * 4.0 + 0.5, 0.0, 1.0);
 	return dp * dp;
+	// return 1.0;
 }
 
 float get_light_raymarched(
@@ -187,7 +231,7 @@ float get_light_raymarched(
 		CloudSettings settings
 ) {
 	const int steps = CLOUDS_LIGHT_RAYMARCH_STEPS;
-	float reach = (settings.top_height - settings.bottom_height) * 0.5;
+	float reach = (settings.top_height - settings.bottom_height) * settings.light_reach;
 
 	float inv_steps = 1.0 / float(steps);
 	float step_len = reach * inv_steps;
@@ -199,12 +243,12 @@ float get_light_raymarched(
 	for (int i = 0; i < steps; ++i) {
 		vec3 pos = pos0 + float(i + 1) * step_len * sun_dir;
 
-		float density = get_density_low(pos, time, settings);
+		float density = get_density(pos, time, settings, 1);
+		density *= settings.density_scale;
 		total_density += density * step_len;
 	}
 
-	float light_density_scale = 1.0;
-	total_density *= settings.density_scale * light_density_scale;
+	total_density *= settings.density_scale * settings.light_density_scale;
 
 	float transmittance = exp(-total_density);
 
@@ -252,24 +296,26 @@ CloudResult raymarch_cloud(
 	const int fsteps = CLOUDS_MAX_RAYMARCH_FSTEPS;
 	float fstep_len = step_len / float(fsteps);
 
+	const float opaque_transmittance = 0.01;
+
 	for (int i = 0; i < steps; ++i) {
-		float density = get_density_low(pos, time, settings);
+		float density = get_density(pos, time, settings, 0);
 		
 		if (density > 0.0) {
 			pos -= ray_dir * step_len;
 
 			for (int j = 0; j < fsteps; ++j) {
-				float density2 = get_density(pos, time, settings);
+				float density2 = get_density(pos, time, settings, 2);
 
 				if (density2 > 0.0) {
+					density2 *= settings.density_scale;
 					float light_transmittance = get_light_raymarched(pos, sun_dir, jitter, time, settings);
 					total_light += density2 * fstep_len * total_transmittance * light_transmittance * phase;
 
-					density2 *= settings.density_scale;
 					float step_transmittance = exp(-density2 * fstep_len);
 					total_transmittance *= step_transmittance;
 
-					if (total_transmittance < 0.01) {
+					if (total_transmittance < opaque_transmittance) {
 						break;
 					}
 				}
@@ -277,7 +323,7 @@ CloudResult raymarch_cloud(
 				pos += ray_dir * fstep_len;
 			}
 
-			if (total_transmittance < 0.01) {
+			if (total_transmittance < opaque_transmittance) {
 				break;
 			}
 		}
@@ -427,17 +473,27 @@ void main() {
 		// out_albedo = atmosphere.rgb;
 		// out_alpha = atmosphere.a;
 
+		vec2 cloud_coverage_rotation_x = u_pc_params.cloud_coverage_rotation_x;
+		mat2 cloud_coverage_rotation = mat2(cloud_coverage_rotation_x, vec2_rotate_90(cloud_coverage_rotation_x));
+
         CloudSettings cloud_settings;
-        cloud_settings.bottom_height =      u_params.planet_radius + u_params.cloud_bottom * u_params.atmosphere_height;
-        cloud_settings.top_height =         u_params.planet_radius + u_params.cloud_top * u_params.atmosphere_height;
-        cloud_settings.density_scale =      u_params.cloud_density_scale;
-        cloud_settings.ground_height =      u_params.planet_radius;
-        cloud_settings.coverage_rotation =  mat2(u_params.cloud_coverage_rotation_x, u_params.cloud_coverage_rotation_y);
-        cloud_settings.coverage_bias =      u_params.cloud_coverage_bias;
-        cloud_settings.shape_scale =        u_params.cloud_shape_scale;
-        cloud_settings.shape_factor =       u_params.cloud_shape_factor;
-        cloud_settings.shape_invert =       u_params.cloud_shape_invert;
-        cloud_settings.blend =              u_params.cloud_blend;
+        cloud_settings.bottom_height =        u_params.planet_radius + u_params.cloud_bottom * u_params.atmosphere_height;
+        cloud_settings.top_height =           u_params.planet_radius + u_params.cloud_top * u_params.atmosphere_height;
+        cloud_settings.density_scale =        u_params.cloud_density_scale;
+        cloud_settings.light_density_scale =  u_params.cloud_light_density_scale;
+        cloud_settings.light_reach =          u_params.cloud_light_reach;
+        cloud_settings.ground_height =        u_params.planet_radius;
+        cloud_settings.coverage_rotation =    cloud_coverage_rotation;
+        cloud_settings.coverage_factor =      u_params.cloud_coverage_factor;
+        cloud_settings.coverage_bias =        u_params.cloud_coverage_bias;
+        cloud_settings.shape_factor =         u_params.cloud_shape_factor;
+        cloud_settings.shape_bias =           u_params.cloud_shape_bias;
+        cloud_settings.shape_scale =          u_params.cloud_shape_scale;
+        cloud_settings.shape_amount =         u_params.cloud_shape_amount;
+        cloud_settings.detail_factor =        u_params.cloud_detail_factor;
+        cloud_settings.detail_bias =          u_params.cloud_detail_bias;
+        cloud_settings.detail_scale =         u_params.cloud_detail_scale;
+        cloud_settings.detail_amount =        u_params.cloud_detail_amount;
 
         render_clouds(
 			color,
