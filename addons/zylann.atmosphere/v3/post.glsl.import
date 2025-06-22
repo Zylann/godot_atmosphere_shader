@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://6qkuxf2hxdu0"
+path="res://.godot/imported/post.glsl-4b2bae71a44db471efa204fe51d3ce57.res"
+
+[deps]
+
+source_file="res://addons/zylann.atmosphere/v3/post.glsl"
+dest_files=["res://.godot/imported/post.glsl-4b2bae71a44db471efa204fe51d3ce57.res"]
+
+[params]
+

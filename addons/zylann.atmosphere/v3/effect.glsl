@@ -34,22 +34,30 @@
 #define CLOUDS_LIGHT_RAYMARCH_STEPS 6
 #define CLOUDS_SECONDARY_LIGHT_RAYMARCH_STEPS 3
 
+//#define FULL_RES
+
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
+#ifdef FULL_RES
 // Rendered scene so far
-layout(rgba16f, set = 0, binding = 0) uniform image2D u_color_image;
+layout(rgba16f, set = 0, binding = 0) uniform image2D u_input_image;
+#else
+layout(rgba8, set = 0, binding = 0) uniform image2D u_output_image0;
+layout(rg8, set = 0, binding = 1) uniform image2D u_output_image1;
+#endif
+
 // Depth of the rendered scene so far
-layout(binding = 1) uniform sampler2D u_depth_texture;
+layout(binding = 2) uniform sampler2D u_depth_texture;
 
 // Grayscale cubemap weighting overall cloud density
-layout(binding = 2) uniform samplerCube u_cloud_coverage_cubemap;
+layout(binding = 3) uniform samplerCube u_cloud_coverage_cubemap;
 // Precomputed noise used to shape the clouds, tiling seamlessly
-layout(binding = 3) uniform sampler3D u_cloud_shape_texture;
+layout(binding = 4) uniform sampler3D u_cloud_shape_texture;
 // Blue noise used for dithering
-layout(binding = 4) uniform sampler2D u_blue_noise_texture;
+layout(binding = 5) uniform sampler2D u_blue_noise_texture;
 
 // Parameters that don't change every frame
-layout (binding = 5) uniform Params {
+layout (binding = 6) uniform Params {
     mat4 world_to_model_matrix;
     
 	float planet_radius;
@@ -86,7 +94,7 @@ layout (binding = 5) uniform Params {
 } u_params;
 
 // Camera
-layout (binding = 6) uniform CamParams {
+layout (binding = 7) uniform CamParams {
     mat4 inv_view_matrix;
     mat4 inv_projection_matrix;
 } u_cam_params;
@@ -114,14 +122,6 @@ const float PI = 3.14159265359;
 
 // x = first hit, y = second hit. Equal if not hit.
 vec2 ray_sphere(vec3 center, float radius, vec3 ray_origin, vec3 ray_dir) {
-	// Works when outside the sphere but breaks when inside at certain positions
-	/*
-	float t = max(dot(center - ray_origin, ray_dir), 0.0);
-	float y = length(center - (ray_origin + ray_dir * t));
-	// TODO y * y means we can use a squared length
-	float x = sqrt(max(radius * radius - y * y, 0.0));
-	return vec2(t - x, t + x);
-	*/
 	vec3 oc = ray_origin - center;
 	float b = dot( oc, ray_dir );
 	vec3 qc = oc - b*ray_dir;
@@ -137,6 +137,10 @@ vec2 ray_sphere(vec3 center, float radius, vec3 ray_origin, vec3 ray_dir) {
 
 float pow2(float x) {
     return x * x;
+}
+
+vec2 pow2_vec2(vec2 v) {
+    return vec2(pow2(v.x), pow2(v.y));
 }
 
 float pow4(float x) {
@@ -377,6 +381,10 @@ struct CloudResult {
 	vec3 transmittance;
 };
 
+CloudResult default_cloud_result() {
+	return CloudResult(vec3(0.0), vec3(1.0));
+}
+
 CloudResult raymarch_cloud(
 	vec3 ray_origin, // in planet space
 	vec3 ray_dir, 
@@ -411,9 +419,7 @@ CloudResult raymarch_cloud(
 	// TODO Not used?
 	// float previous_step_len = 0.0;
 
-	CloudResult result;
-	result.scattering = vec3(0.0);
-	result.transmittance = vec3(1.0);
+	CloudResult result = default_cloud_result();
 
 	for (float i = 0.0; i < max_steps; ++i) {
 		// TODO Is this really needed? We already do max steps which is the sum of all potential hq steps
@@ -522,8 +528,7 @@ CloudResult raymarch_cloud(
 	return result;
 }
 
-void render_clouds(
-	inout vec4 inout_color,
+CloudResult render_clouds(
 	vec3 planet_center_viewspace,
 	vec3 ray_origin,
 	vec3 ray_dir,
@@ -538,6 +543,8 @@ void render_clouds(
 	float night_light_energy
 ) {
 	vec2 rs_clouds_top = ray_sphere(planet_center_viewspace, cloud_settings.top_height, ray_origin, ray_dir);
+
+	CloudResult result = CloudResult(vec3(0.0), vec3(1.0));
 
 	if (rs_clouds_top.x != rs_clouds_top.y) {
 		vec2 rs_clouds_bottom = ray_sphere(planet_center_viewspace, cloud_settings.bottom_height, ray_origin, ray_dir);
@@ -578,10 +585,13 @@ void render_clouds(
 				night_light_energy
             );
 
-			const float exposure = 1.0;
-			inout_color.rgb = inout_color.rgb * rr.transmittance + rr.scattering * exposure;
+			// const float exposure = 1.0;
+			// inout_color.rgb = inout_color.rgb * rr.transmittance + rr.scattering * exposure;
+			result = rr;
 		}
 	}
+
+	return result;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -627,7 +637,7 @@ void main() {
 	// TODO if we run this shader in a double-clip scenario,
 	// we have to account for the near and far clips properly, so they can be composed seamlessly
 
-    vec4 color = imageLoad(u_color_image, fragcoord);
+	CloudResult cr = default_cloud_result();
 
 	if (rs_atmo.x != rs_atmo.y) {
 		float t_begin = max(rs_atmo.x, 0.0);
@@ -695,8 +705,7 @@ void main() {
         cs.detail_amount =            u_params.cloud_detail_amount;
         cs.detail_falloff_distance =  u_params.cloud_detail_falloff_distance;
 
-        render_clouds(
-			color,
+        cr = render_clouds(
             u_pc_params.planet_center_viewspace.xyz,
             ray_origin,
             ray_dir,
@@ -715,8 +724,18 @@ void main() {
 			),
 			u_params.night_light_energy
         );
-	}
-	// float nonlinear_depth = texture(u_depth_texture, screen_uv).x;
 
+	}
+
+#ifdef FULL_RES
+    vec4 color = imageLoad(u_color_image, fragcoord);
+	const float exposure = 1.0;
+	color.rgb = color.rgb * cr.transmittance + cr.scattering * exposure;
     imageStore(u_color_image, fragcoord, color);
+
+#else
+	imageStore(u_output_image0, fragcoord, vec4(cr.transmittance, sqrt(cr.scattering.r)));
+	imageStore(u_output_image1, fragcoord, vec4(sqrt(cr.scattering.gb), 0.0, 0.0));
+
+#endif
 }

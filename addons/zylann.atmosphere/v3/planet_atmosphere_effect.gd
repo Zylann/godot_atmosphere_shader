@@ -52,22 +52,36 @@ var _dirty: bool = true
 var _mutex: Mutex
 
 var _rd: RenderingDevice
+
 var _shader_rid: RID
 var _pipeline_rid: RID
+
+var _post_shader_rid: RID
+var _post_pipeline_rid: RID
+
 var _linear_sampler: RID
 var _nearest_sampler: RID
+
 var _params_ubo: RID
 var _cam_params_ubo: RID
+var _cloud_buffer0: RID
+var _cloud_buffer1: RID
+
 var _frame_counter := 0
 var _point_light := PointLightInfo.new()
+var _last_screen_resolution := Vector2i()
 
 const _shader_file = preload("./effect.glsl")
+const _post_shader_file = preload("./post.glsl")
 const _cloud_coverage_cubemap = preload("res://tests/cloud_coverage_2.png")
 const _cloud_shape_texture = \
 	preload("res://addons/zylann.atmosphere/demo/cloud_shape_texture3d.tres")
+#const _cloud_shape_texture = \
+	#preload("res://tests/swirly.tres")
 const _blue_noise_texture = preload("res://addons/zylann.atmosphere/blue_noise.png")
 
 const _callback_type := EFFECT_CALLBACK_TYPE_PRE_TRANSPARENT
+const _full_res := false
 
 func _init() -> void:
 	_mutex = Mutex.new()
@@ -115,6 +129,10 @@ func _clear_render() -> void:
 		_rd.free_rid(_shader_rid)
 		_shader_rid = RID()
 
+	if _post_shader_rid.is_valid():
+		_rd.free_rid(_post_shader_rid)
+		_shader_rid = RID()
+
 	if _nearest_sampler.is_valid():
 		_rd.free_rid(_nearest_sampler)
 		_nearest_sampler = RID()
@@ -130,6 +148,18 @@ func _clear_render() -> void:
 	if _cam_params_ubo.is_valid():
 		_rd.free_rid(_cam_params_ubo)
 		_cam_params_ubo = RID()
+	
+	_clear_cloud_buffers()
+
+
+func _clear_cloud_buffers() -> void:
+	if _cloud_buffer0.is_valid():
+		_rd.free_rid(_cloud_buffer0)
+		_cloud_buffer0 = RID()
+
+	if _cloud_buffer1.is_valid():
+		_rd.free_rid(_cloud_buffer1)
+		_cloud_buffer1 = RID()
 
 
 func _notification(what: int) -> void:
@@ -139,10 +169,20 @@ func _notification(what: int) -> void:
 			# https://github.com/godotengine/godot-proposals/issues/11774
 			#_clear_render()
 			_rd.free_rid(_shader_rid)
+			
+			if _post_shader_rid.is_valid():
+				_rd.free_rid(_post_shader_rid)
+			
 			_rd.free_rid(_nearest_sampler)
 			_rd.free_rid(_linear_sampler)
 			_rd.free_rid(_params_ubo)
 			_rd.free_rid(_cam_params_ubo)
+			
+			if _cloud_buffer0.is_valid():
+				_rd.free_rid(_cloud_buffer0)
+
+			if _cloud_buffer1.is_valid():
+				_rd.free_rid(_cloud_buffer1)
 
 
 func _update_shader() -> bool:
@@ -153,16 +193,26 @@ func _update_shader() -> bool:
 	# Does any of this actually need mutex lock?
 	
 	var shader_spirv := _shader_file.get_spirv()
-	
 	if shader_spirv.compile_error_compute != "":
 		return false
-	
 	_shader_rid = _rd.shader_create_from_spirv(shader_spirv)
 	if not _shader_rid.is_valid():
 		return false
-	
 	_pipeline_rid = _rd.compute_pipeline_create(_shader_rid)
-	return _pipeline_rid.is_valid()
+	if not _pipeline_rid.is_valid():
+		return false
+
+	var post_shader_spirv := _post_shader_file.get_spirv()
+	if post_shader_spirv.compile_error_compute != "":
+		return false
+	_post_shader_rid = _rd.shader_create_from_spirv(post_shader_spirv)
+	if not _post_shader_rid.is_valid():
+		return false
+	_post_pipeline_rid = _rd.compute_pipeline_create(_post_shader_rid)
+	if not _post_pipeline_rid.is_valid():
+		return false
+	
+	return true
 
 
 func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) -> void:
@@ -187,10 +237,46 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 	if size.x == 0 and size.y == 0:
 		return
 	
-	# We can use a compute shader here.
-	var x_groups := ceildiv(size.x, 8)
-	var y_groups := ceildiv(size.y, 8)
-	var z_groups := 1
+	var cloud_cs_groups := Vector3i()
+	
+	var post_cs_groups := Vector3i(
+		ceildiv(size.x, 8),
+		ceildiv(size.y, 8),
+		1
+	)
+	
+	var downsample_factor := 2
+	var cloud_buffer_res := size / downsample_factor
+	
+	if _full_res:
+		cloud_cs_groups = post_cs_groups
+	else:
+		cloud_cs_groups.x = ceildiv(cloud_buffer_res.x, 8)
+		cloud_cs_groups.y = ceildiv(cloud_buffer_res.y, 8)
+		cloud_cs_groups.z = 1
+		
+		if size != _last_screen_resolution:
+			_last_screen_resolution = size
+			
+			_clear_cloud_buffers()
+			
+			var format0 := RDTextureFormat.new()
+			format0.width = cloud_buffer_res.x
+			format0.height = cloud_buffer_res.y
+			format0.format = RenderingDevice.DATA_FORMAT_R8G8B8A8_UNORM
+			format0.usage_bits = \
+				RenderingDevice.TEXTURE_USAGE_STORAGE_BIT | \
+				RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT
+			_cloud_buffer0 = _rd.texture_create(format0, RDTextureView.new(), [])
+
+			var format1 := RDTextureFormat.new()
+			format1.width = cloud_buffer_res.x
+			format1.height = cloud_buffer_res.y
+			format1.format = RenderingDevice.DATA_FORMAT_R8G8_UNORM
+			format1.usage_bits = \
+				RenderingDevice.TEXTURE_USAGE_STORAGE_BIT | \
+				RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT
+			_cloud_buffer1 = _rd.texture_create(format1, RDTextureView.new(), [])
 
 	var time_seconds := Time.get_ticks_msec() / 1000.0
 
@@ -210,9 +296,14 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 	# Faster than UBO but typically limited in size (128 bytes minimum).
 	# Also needs to be aligned to 16 bytes
 	var push_constant: PackedFloat32Array = PackedFloat32Array()
-
-	push_constant.push_back(size.x)
-	push_constant.push_back(size.y)
+	
+	if _full_res:
+		push_constant.push_back(size.x)
+		push_constant.push_back(size.y)
+	else:
+		push_constant.push_back(cloud_buffer_res.x)
+		push_constant.push_back(cloud_buffer_res.y)
+		
 	push_constant.push_back(time_seconds)
 	push_constant.push_back(_frame_counter & 255)
 
@@ -232,6 +323,13 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 	push_constant.push_back(0.0)
 	push_constant.push_back(0.0)
 	
+	var post_push_constant := PackedFloat32Array()
+	if not _full_res:
+		post_push_constant.push_back(size.x)
+		post_push_constant.push_back(size.y)
+		post_push_constant.push_back(cloud_buffer_res.x)
+		post_push_constant.push_back(cloud_buffer_res.y)
+	
 	var cam_params_f32 := _make_camera_params_f32(scene_data)
 	var cam_params_bytes := cam_params_f32.to_byte_array()
 	_rd.buffer_update(_cam_params_ubo, 0, cam_params_bytes.size(), cam_params_bytes)
@@ -244,16 +342,31 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 	# # Loop through views just in case we're doing stereo rendering.
 	var view_count := render_scene_buffers.get_view_count()
 	for view_index in view_count:
+		var color_image_uniform : RDUniform
+		var cloud_buffer0_uniform : RDUniform
+		var cloud_buffer1_uniform : RDUniform
+		
 		var color_image := render_scene_buffers.get_color_layer(view_index)
-		var color_image_uniform := RDUniform.new()
+		color_image_uniform = RDUniform.new()
 		color_image_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
 		color_image_uniform.binding = 0
 		color_image_uniform.add_id(color_image)
 		
+		if not _full_res:
+			cloud_buffer0_uniform = RDUniform.new()
+			cloud_buffer0_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+			cloud_buffer0_uniform.binding = 0
+			cloud_buffer0_uniform.add_id(_cloud_buffer0)
+
+			cloud_buffer1_uniform = RDUniform.new()
+			cloud_buffer1_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+			cloud_buffer1_uniform.binding = 1
+			cloud_buffer1_uniform.add_id(_cloud_buffer1)
+		
 		var depth_image := render_scene_buffers.get_depth_layer(view_index)
 		var depth_texture_uniform := RDUniform.new()
 		depth_texture_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
-		depth_texture_uniform.binding = 1
+		depth_texture_uniform.binding = 2
 		depth_texture_uniform.add_id(_nearest_sampler)
 		depth_texture_uniform.add_id(depth_image)
 		
@@ -262,7 +375,7 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 		var cloud_coverage_cubemap_uniform := RDUniform.new()
 		cloud_coverage_cubemap_uniform.uniform_type = \
 			RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
-		cloud_coverage_cubemap_uniform.binding = 2
+		cloud_coverage_cubemap_uniform.binding = 3
 		cloud_coverage_cubemap_uniform.add_id(_linear_sampler)
 		cloud_coverage_cubemap_uniform.add_id(cloud_coverage_cubemap_rd)
 		
@@ -271,7 +384,7 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 		var cloud_shape_texture_uniform := RDUniform.new()
 		cloud_shape_texture_uniform.uniform_type = \
 			RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
-		cloud_shape_texture_uniform.binding = 3
+		cloud_shape_texture_uniform.binding = 4
 		cloud_shape_texture_uniform.add_id(_linear_sampler)
 		cloud_shape_texture_uniform.add_id(cloud_shape_texture_rd)
 		
@@ -279,29 +392,72 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 			RenderingServer.texture_get_rd_texture(_blue_noise_texture.get_rid())
 		var blue_noise_texture_uniform := RDUniform.new()
 		blue_noise_texture_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
-		blue_noise_texture_uniform.binding = 4
+		blue_noise_texture_uniform.binding = 5
 		blue_noise_texture_uniform.add_id(_linear_sampler)
 		blue_noise_texture_uniform.add_id(blue_noise_texture_rd)
 		
 		var params_uniform := RDUniform.new()
 		params_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_UNIFORM_BUFFER
-		params_uniform.binding = 5
+		params_uniform.binding = 6
 		params_uniform.add_id(_params_ubo)
 
 		var cam_params_uniform := RDUniform.new()
 		cam_params_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_UNIFORM_BUFFER
-		cam_params_uniform.binding = 6
+		cam_params_uniform.binding = 7
 		cam_params_uniform.add_id(_cam_params_ubo)
 		
-		var uniform_set_items := [
-			color_image_uniform,
-			depth_texture_uniform,
-			cloud_coverage_cubemap_uniform,
-			cloud_shape_texture_uniform,
-			blue_noise_texture_uniform,
-			params_uniform,
-			cam_params_uniform
-		]
+		var uniform_set_items : Array[RDUniform]
+		
+		if _full_res:
+			uniform_set_items = [
+				color_image_uniform,
+				depth_texture_uniform,
+				cloud_coverage_cubemap_uniform,
+				cloud_shape_texture_uniform,
+				blue_noise_texture_uniform,
+				params_uniform,
+				cam_params_uniform
+			]
+		else:
+			uniform_set_items = [
+				cloud_buffer0_uniform,
+				cloud_buffer1_uniform,
+				depth_texture_uniform,
+				cloud_coverage_cubemap_uniform,
+				cloud_shape_texture_uniform,
+				blue_noise_texture_uniform,
+				params_uniform,
+				cam_params_uniform
+			]
+		
+		var post_uniform_set : RID
+		if not _full_res:
+			var depth_texture_uniform2 := RDUniform.new()
+			depth_texture_uniform2.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+			depth_texture_uniform2.binding = 1
+			depth_texture_uniform2.add_id(_nearest_sampler)
+			depth_texture_uniform2.add_id(depth_image)
+			
+			var input_cloud0_uniform := RDUniform.new()
+			input_cloud0_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+			input_cloud0_uniform.binding = 2
+			input_cloud0_uniform.add_id(_linear_sampler)
+			input_cloud0_uniform.add_id(_cloud_buffer0)
+
+			var input_cloud1_uniform := RDUniform.new()
+			input_cloud1_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+			input_cloud1_uniform.binding = 3
+			input_cloud1_uniform.add_id(_linear_sampler)
+			input_cloud1_uniform.add_id(_cloud_buffer1)
+			
+			var post_uniform_set_items = [
+				color_image_uniform,
+				depth_texture_uniform2,
+				input_cloud0_uniform,
+				input_cloud1_uniform
+			]
+			
+			post_uniform_set = UniformSetCacheRD.get_cache(_post_shader_rid, 0, post_uniform_set_items)
 		
 		var uniform_set := UniformSetCacheRD.get_cache(_shader_rid, 0, uniform_set_items)
 		
@@ -314,8 +470,31 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 			push_constant_bytes,
 			push_constant_bytes.size()
 		)
-		_rd.compute_list_dispatch(compute_list, x_groups, y_groups, z_groups)
+		_rd.compute_list_dispatch(
+			compute_list, 
+			cloud_cs_groups.x, 
+			cloud_cs_groups.y, 
+			cloud_cs_groups.z
+		)
 		_rd.compute_list_end()
+
+		if not _full_res:
+			var post_compute_list := _rd.compute_list_begin()
+			_rd.compute_list_bind_compute_pipeline(post_compute_list, _post_pipeline_rid)
+			_rd.compute_list_bind_uniform_set(post_compute_list, post_uniform_set, 0)
+			var post_push_constant_bytes = post_push_constant.to_byte_array()
+			_rd.compute_list_set_push_constant(
+				post_compute_list,
+				post_push_constant_bytes,
+				post_push_constant_bytes.size()
+			)
+			_rd.compute_list_dispatch(
+				post_compute_list, 
+				post_cs_groups.x, 
+				post_cs_groups.y, 
+				post_cs_groups.z
+			)
+			_rd.compute_list_end()
 
 
 func _make_params_f32() -> PackedFloat32Array:
