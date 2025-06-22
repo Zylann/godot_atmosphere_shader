@@ -81,7 +81,7 @@ layout (binding = 5) uniform Params {
 	float point_light_pos_z;
 	float point_light_radius;
 
-	float reserved0;
+	float night_light_energy;
 	float reserved1;
 } u_params;
 
@@ -397,7 +397,8 @@ CloudResult raymarch_cloud(
 	float time, 
 	vec3 cam_pos,
 	CloudSettings settings,
-	vec4 point_light
+	vec4 point_light,
+	float night_light_energy
 ) {
 	vec3 sun_color = vec3(1.0);
 	const float cloud_light_multiplier = 50.0;
@@ -493,7 +494,7 @@ CloudResult raymarch_cloud(
 					// Night light
 					// TODO Option to use cheap height light?
 					if (planet_shadow < 1.0) {
-						light_energy += 0.005 * raymarch_light_energy(
+						light_energy += night_light_energy * raymarch_light_energy(
 							pos, 
 							normalize(pos), 
 							cam_pos, 
@@ -543,7 +544,8 @@ void render_clouds(
 	float jitter,
     float time,
     CloudSettings cloud_settings,
-	vec4 point_light
+	vec4 point_light,
+	float night_light_energy
 ) {
 	vec2 rs_clouds_top = ray_sphere(planet_center_viewspace, cloud_settings.top_height, ray_origin, ray_dir);
 
@@ -582,7 +584,8 @@ void render_clouds(
 				time, 
 				cam_pos_model,
                 cloud_settings,
-				point_light
+				point_light,
+				night_light_energy
             );
 
 			const float exposure = 1.0;
@@ -719,7 +722,8 @@ void main() {
 				u_params.point_light_pos_y,
 				u_params.point_light_pos_z,
 				u_params.point_light_radius
-			)
+			),
+			u_params.night_light_energy
         );
 	}
 	// float nonlinear_depth = texture(u_depth_texture, screen_uv).x;

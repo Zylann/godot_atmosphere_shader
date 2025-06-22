@@ -12,6 +12,7 @@ extends CompositorEffect
 
 @export_group("Light sources")
 @export var sun_direction := Vector3(0.0, -1.0, 0.0)
+@export var night_light_energy := 0.005
 
 @export_group("Clouds height", "clouds")
 @export_range(0.0, 1.0, 0.001) var clouds_bottom := 0.3
@@ -349,7 +350,7 @@ func _make_params_f32() -> PackedFloat32Array:
 	params_f32.append(pl_pos.z)
 	params_f32.append(_point_light.radius)
 	
-	params_f32.append(0.0)
+	params_f32.append(night_light_energy)
 	params_f32.append(0.0)
 	
 	#assert(params_f32.size() % 16 == 0)
