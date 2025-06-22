@@ -228,16 +228,6 @@ float get_planet_shadow(vec3 pos, float planet_radius, vec3 sun_dir) {
 	// return 1.0;
 }
 
-#ifndef CLOUDS_MAX_RAYMARCH_STEPS
-// Need to define it otherwise the Godot shader editor has errors. Using a small value to make it
-// stand out. Normally the shader using this file should define it.
-#define CLOUDS_MAX_RAYMARCH_STEPS 8
-#endif
-
-#ifndef CLOUDS_MAX_RAYMARCH_FSTEPS
-#define CLOUDS_MAX_RAYMARCH_FSTEPS 1
-#endif
-
 float henyey_greenstein(float g, float mu) {
 	float gg = g * g;
 	return (1.0 / (4.0 * PI))  * ((1.0 - gg) / pow(1.0 + gg - 2.0 * g * mu, 1.5));
