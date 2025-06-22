@@ -200,6 +200,10 @@ float length_sq_vec3(vec3 v) {
 	return dot(v, v);
 }
 
+float max_vec3_component(vec3 v) {
+	return max(v.x, max(v.y, v.z));
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Clouds
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -425,6 +429,7 @@ CloudResult raymarch_cloud(
 	// float previous_step_len = 0.0;
 
 	CloudResult result = default_cloud_result();
+	const float break_transmittance = 0.01;
 
 	for (float i = 0.0; i < max_steps; ++i) {
 		// TODO Is this really needed? We already do max steps which is the sum of all potential hq steps
@@ -514,7 +519,7 @@ CloudResult raymarch_cloud(
 					result.scattering += result.transmittance * integ_scatt;
 					result.transmittance *= transmittance;
 
-					if (length(result.transmittance) <= 0.01) {
+					if (max_vec3_component(result.transmittance) <= break_transmittance) {
 						result.transmittance = vec3(0.0);
 						break;
 					}
