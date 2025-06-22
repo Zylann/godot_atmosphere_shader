@@ -514,7 +514,7 @@ CloudResult raymarch_cloud(
 
 					vec3 luminance = ambient + sun_light * light_energy;
 					vec3 transmittance = exp(-extinction * hq_step_len * EXTINCTION_MULT);
-					vec3 integ_scatt = extinction * (luminance - luminance * transmittance) / extinction;
+					vec3 integ_scatt = luminance * (1.0 - transmittance);
 
 					result.scattering += result.transmittance * integ_scatt;
 					result.transmittance *= transmittance;
