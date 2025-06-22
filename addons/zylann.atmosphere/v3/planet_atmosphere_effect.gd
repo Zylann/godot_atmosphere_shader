@@ -20,7 +20,7 @@ extends CompositorEffect
 
 @export_group("Clouds light", "clouds")
 @export var clouds_light_density_scale := 1.0
-@export_range(0.0, 2.0, 0.1) var clouds_light_reach := 1.0
+@export_range(0.0, 2.0, 0.01) var clouds_light_reach := 1.0
 
 @export_group("Clouds coverage", "clouds")
 @export_range(0.0, 1.0) var clouds_coverage_factor := 1.0
@@ -40,17 +40,25 @@ extends CompositorEffect
 @export var clouds_detail_bias := 0.0
 @export var clouds_detail_scale := 0.05
 @export_range(0.0, 1.0) var clouds_detail_amount := 0.5
+@export var clouds_detail_falloff_distance := 100.0
 
-var _dirty : bool = true
-var _mutex : Mutex
+class PointLightInfo:
+	var position := Vector3()
+	var radius := 10.0
+	#var enabled := true
 
-var _rd : RenderingDevice
-var _shader_rid : RID
-var _pipeline_rid : RID
-var _linear_sampler : RID
-var _nearest_sampler : RID
-var _params_ubo : RID
-var _cam_params_ubo : RID
+var _dirty: bool = true
+var _mutex: Mutex
+
+var _rd: RenderingDevice
+var _shader_rid: RID
+var _pipeline_rid: RID
+var _linear_sampler: RID
+var _nearest_sampler: RID
+var _params_ubo: RID
+var _cam_params_ubo: RID
+var _frame_counter := 0
+var _point_light := PointLightInfo.new()
 
 const _shader_file = preload("./effect.glsl")
 const _cloud_coverage_cubemap = preload("res://tests/cloud_coverage_2.png")
@@ -58,14 +66,20 @@ const _cloud_shape_texture = \
 	preload("res://addons/zylann.atmosphere/demo/cloud_shape_texture3d.tres")
 const _blue_noise_texture = preload("res://addons/zylann.atmosphere/blue_noise.png")
 
+const _callback_type := EFFECT_CALLBACK_TYPE_PRE_TRANSPARENT
 
 func _init() -> void:
 	_mutex = Mutex.new()
 	
-	effect_callback_type = EFFECT_CALLBACK_TYPE_POST_TRANSPARENT
+	effect_callback_type = _callback_type
 	_rd = RenderingServer.get_rendering_device()
 	
 	RenderingServer.call_on_render_thread(_init_render)
+
+
+func set_point_light(pos: Vector3, radius: float) -> void:
+	_point_light.position = pos
+	_point_light.radius = radius
 
 
 func _init_render() -> void:
@@ -90,7 +104,7 @@ func _init_render() -> void:
 	
 	var cam_params_f32 := _make_camera_params_f32(null)
 	_cam_params_ubo = _rd.uniform_buffer_create(
-		cam_params_f32.size() * 4, 
+		cam_params_f32.size() * 4,
 		cam_params_f32.to_byte_array()
 	)
 
@@ -123,7 +137,6 @@ func _notification(what: int) -> void:
 			# TODO Can't call our own methods on cleanup... so we have code repetition...
 			# https://github.com/godotengine/godot-proposals/issues/11774
 			#_clear_render()
-			
 			_rd.free_rid(_shader_rid)
 			_rd.free_rid(_nearest_sampler)
 			_rd.free_rid(_linear_sampler)
@@ -156,7 +169,7 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 		return
 	
 	# Looks redundant, but users might be able to change that in the UI
-	if p_effect_callback_type != EFFECT_CALLBACK_TYPE_POST_TRANSPARENT:
+	if p_effect_callback_type != _callback_type:
 		return
 
 	if not _update_shader():
@@ -164,7 +177,7 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 	
 	# Get our render scene buffers object, this gives us access to our render buffers.
 	# Note that implementation differs per renderer hence the need for the cast.
-	var render_scene_buffers : RenderSceneBuffersRD = p_render_data.get_render_scene_buffers()
+	var render_scene_buffers: RenderSceneBuffersRD = p_render_data.get_render_scene_buffers()
 	if render_scene_buffers == null:
 		return
 
@@ -188,8 +201,10 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 	
 	# TODO Sun should be a direction
 	var sun_center_world := \
-		model_transform.origin - sun_direction * (2.0*(planet_radius + atmosphere_height))
+		model_transform.origin - sun_direction * (2.0 * (planet_radius + atmosphere_height))
 	var sun_center_viewspace := world_to_view * sun_center_world
+
+	_frame_counter += 1
 	
 	# Faster than UBO but typically limited in size (128 bytes minimum).
 	# Also needs to be aligned to 16 bytes
@@ -198,7 +213,7 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 	push_constant.push_back(size.x)
 	push_constant.push_back(size.y)
 	push_constant.push_back(time_seconds)
-	push_constant.push_back(0.0)
+	push_constant.push_back(_frame_counter & 255)
 
 	push_constant.push_back(planet_center_viewspace.x)
 	push_constant.push_back(planet_center_viewspace.y)
@@ -294,8 +309,8 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 		_rd.compute_list_bind_uniform_set(compute_list, uniform_set, 0)
 		var push_constant_bytes = push_constant.to_byte_array()
 		_rd.compute_list_set_push_constant(
-			compute_list, 
-			push_constant_bytes, 
+			compute_list,
+			push_constant_bytes,
 			push_constant_bytes.size()
 		)
 		_rd.compute_list_dispatch(compute_list, x_groups, y_groups, z_groups)
@@ -325,8 +340,15 @@ func _make_params_f32() -> PackedFloat32Array:
 	params_f32.append(clouds_detail_bias)
 	params_f32.append(clouds_detail_scale)
 	params_f32.append(clouds_detail_amount)
+	params_f32.append(clouds_detail_falloff_distance)
 	
-	params_f32.append(0.0)
+	var pl_pos := world_to_model * _point_light.position
+	#print("PL ", pl_pos, ", ", _point_light.radius)
+	params_f32.append(pl_pos.x)
+	params_f32.append(pl_pos.y)
+	params_f32.append(pl_pos.z)
+	params_f32.append(_point_light.radius)
+	
 	params_f32.append(0.0)
 	params_f32.append(0.0)
 	

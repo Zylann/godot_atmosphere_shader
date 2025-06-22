@@ -4,6 +4,7 @@ extends Node3D
 
 
 @export var compositor_effect: PlanetAtmosphereEffect
+@export var point_light_path := NodePath()
 
 var _directional_light: DirectionalLight3D
 #var _world_environment: WorldEnvironment
@@ -37,6 +38,15 @@ func _process(delta: float) -> void:
 		if _directional_light != null:
 			compositor_effect.sun_direction = -_directional_light.global_transform.basis.z
 			compositor_effect.model_transform = global_transform
+			
+		if not point_light_path.is_empty():
+			var point_light_node : Node = get_node(point_light_path)
+			var point_light := point_light_node as OmniLight3D
+			if point_light != null:
+				compositor_effect.set_point_light(
+					point_light.global_position, 
+					point_light.omni_range
+				)
 
 
 static func is_null_or_invalid(o) -> bool:

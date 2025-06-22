@@ -1,11 +1,38 @@
 #[compute]
 #version 450
 
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Based on SimonDevy's clouds project, with modifications
+// https://github.com/simondevyoutube/Shaders_Clouds1/tree/main
+//
+// MIT License
+//
+// Copyright (c) 2022 simondevyoutube
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 // #define CLOUDS_RAYMARCHED_LIGHTING
-// #define CLOUDS_ALWAYS_LOW_QUALITY
-#define CLOUDS_MAX_RAYMARCH_STEPS 32
+#define CLOUDS_MAX_RAYMARCH_STEPS 24
 #define CLOUDS_MAX_RAYMARCH_FSTEPS 4
 #define CLOUDS_LIGHT_RAYMARCH_STEPS 6
+#define CLOUDS_SECONDARY_LIGHT_RAYMARCH_STEPS 3
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -46,10 +73,16 @@ layout (binding = 5) uniform Params {
     float cloud_detail_bias;// = 0.0;
     float cloud_detail_scale;// = 1.0;
 	float cloud_detail_amount;// = 1.0;
+	float cloud_detail_falloff_distance;
+
+	// TODO Have a few more point lights?
+	float point_light_pos_x;
+	float point_light_pos_y;
+	float point_light_pos_z;
+	float point_light_radius;
 
 	float reserved0;
 	float reserved1;
-	float reserved2;
 } u_params;
 
 // Camera
@@ -62,7 +95,7 @@ layout (binding = 6) uniform CamParams {
 layout(push_constant, std430) uniform PcParams {
     vec2 raster_size; // 0..7
     float time; // 8..11
-    float reserved0; // 12..15
+    float frame; // 12..15
 
     vec4 planet_center_viewspace; // 16..31 // w contains sphere_depth_factor
 
@@ -76,6 +109,8 @@ layout(push_constant, std430) uniform PcParams {
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Utility
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+const float PI = 3.14159265359;
 
 // x = first hit, y = second hit. Equal if not hit.
 vec2 ray_sphere(vec3 center, float radius, vec3 ray_origin, vec3 ray_dir) {
@@ -127,6 +162,35 @@ vec2 vec2_rotate_90(vec2 v) {
 	return vec2(-v.y, v.x);
 }
 
+float unlerp(float minv, float maxv, float v) {
+	return (v - minv) / (maxv - minv);
+}
+
+float linearstep(float minv, float maxv, float v) {
+	return clamp(unlerp(minv, maxv, v), 0.0, 1.0);
+}
+
+float remap(float v, float min0, float max0, float min1, float max1) {
+	float t = unlerp(min0, max0, v);
+	return mix(min1, max1, t);
+}
+
+float pand_p2(float x, float c, float w) {
+	return clamp(1.0 - pow2(2.0 * (x - c) / w), 0.0, 1.0);
+}
+
+float band_p4(float x, float c, float w) {
+	return clamp(1.0 - pow4(2.0 * (x - c) / w), 0.0, 1.0);
+}
+
+float band_p2s_unit(float x, float s) {
+	return max(1.0 - pow2(max((abs(x) - 1.0 + s) / s, 0.0)), 0.0);
+}
+
+float band_p2s(float x, float w, float s) {
+	return band_p2s_unit(x / w, s);
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Clouds
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -155,106 +219,13 @@ struct CloudSettings {
 	float detail_bias;
 	float detail_scale;
 	float detail_amount;
+	float detail_falloff_distance;
 };
-
-float pand_p2(float x, float c, float w) {
-	return clamp(1.0 - pow2(2.0 * (x - c) / w), 0.0, 1.0);
-}
-
-float band_p4(float x, float c, float w) {
-	return clamp(1.0 - pow4(2.0 * (x - c) / w), 0.0, 1.0);
-}
-
-float band_p2s_unit(float x, float s) {
-	return max(1.0 - pow2(max((abs(x) - 1.0 + s) / s, 0.0)), 0.0);
-}
-
-float band_p2s(float x, float w, float s) {
-	return band_p2s_unit(x / w, s);
-}
-
-float get_density(vec3 pos_world, float time, CloudSettings settings, int quality) {
-	float height = length(pos_world) - settings.bottom_height;
-	float height_ratio = height / (settings.top_height - settings.bottom_height);
-
-	if (height_ratio < 0.0 || height_ratio > 1.0) {
-		return 0.0;
-	}
-
-	vec2 coverage_pos_2d = settings.coverage_rotation * pos_world.xz;
-	vec3 coverage_pos = vec3(coverage_pos_2d.x, pos_world.y, coverage_pos_2d.y);
-	float coverage = texture(u_cloud_coverage_cubemap, coverage_pos).r;
-	coverage = clamp(coverage * settings.coverage_factor + settings.coverage_bias, 0.0, 1.0);
-	coverage = band_p2s_unit(height_ratio * 2.0 - 1.0, 0.5) * coverage;
-	
-	if (coverage <= 0.0) {
-		return 0.0;
-	}
-
-	if (quality == 0) {
-		return coverage;
-	}
-
-	vec3 shape_uv = pos_world * settings.shape_scale + vec3(time*0.01, 0.0, 0.0);
-	float shape = texture(u_cloud_shape_texture, shape_uv).r;
-	shape = shape * settings.shape_factor + settings.shape_bias;
-
-	float density = max(coverage - shape * settings.shape_amount, 0.0);
-	if (density <= 0.0) {
-		return 0.0;
-	}
-
-	if (quality == 1) {
-		return density;
-	}
-
-	vec3 detail_uv = pos_world * settings.detail_scale + vec3(time*0.005, 0.0, 0.0);
-	float detail = texture(u_cloud_shape_texture, detail_uv).r;
-	detail = detail * settings.detail_factor + settings.detail_bias;
-
-	density = max(density - detail * settings.detail_amount, 0.0);
-
-	return density;
-}
 
 float get_planet_shadow(vec3 pos, float planet_radius, vec3 sun_dir) {
 	float dp = clamp(dot(normalize(pos), sun_dir) * 4.0 + 0.5, 0.0, 1.0);
 	return dp * dp;
 	// return 1.0;
-}
-
-float get_light_raymarched(
-		vec3 pos0, 
-		vec3 sun_dir, 
-		float jitter, // TODO Use jitter?
-		float time, 
-		CloudSettings settings
-) {
-	const int steps = CLOUDS_LIGHT_RAYMARCH_STEPS;
-	float reach = (settings.top_height - settings.bottom_height) * settings.light_reach;
-
-	float inv_steps = 1.0 / float(steps);
-	float step_len = reach * inv_steps;
-
-	pos0 += sun_dir * (step_len * jitter);
-
-	float total_density = 0.0;
-	
-	for (int i = 0; i < steps; ++i) {
-		vec3 pos = pos0 + float(i + 1) * step_len * sun_dir;
-
-		float density = get_density(pos, time, settings, 1);
-		density *= settings.density_scale;
-		total_density += density * step_len;
-	}
-
-	total_density *= settings.density_scale * settings.light_density_scale;
-
-	float transmittance = exp(-total_density);
-
-	transmittance *= get_planet_shadow(pos0, settings.ground_height, sun_dir);
-
-	return transmittance;
 }
 
 #ifndef CLOUDS_MAX_RAYMARCH_STEPS
@@ -267,9 +238,153 @@ float get_light_raymarched(
 #define CLOUDS_MAX_RAYMARCH_FSTEPS 1
 #endif
 
+float henyey_greenstein(float g, float mu) {
+	float gg = g * g;
+	return (1.0 / (4.0 * PI))  * ((1.0 - gg) / pow(1.0 + gg - 2.0 * g * mu, 1.5));
+}
+
+float dual_henyey_greenstein(float g, float costh) {
+	const float dual_lobe_weight = 0.7;
+	return mix(henyey_greenstein(-g, costh), henyey_greenstein(g, costh), dual_lobe_weight);
+}
+
+float phase_function(float g, float costh) {
+	return dual_henyey_greenstein(g, costh);
+}
+
+struct Coverage {
+	float combined;
+	float map;
+	float shell;
+};
+
+Coverage sample_sdf_low(vec3 pos, CloudSettings settings) {
+	float distance_to_core = length(pos);
+	// float height = distance_to_core - settings.bottom_height;
+	// float height_ratio = height / (settings.top_height - settings.bottom_height);
+
+	const float mid_height = 0.5 * (settings.top_height + settings.bottom_height);
+	const float shell_height = settings.top_height - settings.bottom_height;
+	float shell_sd = abs(distance_to_core - mid_height) - shell_height * 0.5;
+
+	vec2 coverage_pos_2d = settings.coverage_rotation * pos.xz;
+	vec3 coverage_uv = vec3(coverage_pos_2d.x, pos.y, coverage_pos_2d.y);
+	float coverage = texture(u_cloud_coverage_cubemap, coverage_uv).r;
+	float map_sd = (coverage * 2.0 - 1.0 + settings.coverage_bias) * distance_to_core;
+
+	float sd = max(shell_sd, map_sd);
+	
+	return Coverage(sd, map_sd, shell_sd);
+}
+
+float sample_density(Coverage base, vec3 pos, vec3 cam_origin, float time, CloudSettings settings) {
+	float base_sd = max(base.map * settings.coverage_factor, base.shell);
+	float density = clamp(-base_sd, 0.0, 1.0);
+
+	if (density <= 0.0) {
+		return 0.0;
+	}
+
+	float distance_to_core = length(pos);
+	float height_ratio = (distance_to_core - settings.bottom_height) / (settings.top_height - settings.bottom_height);
+	float height_falloff = 0.5;
+
+	density = band_p2s_unit(height_ratio * 2.0 - 1.0, 0.5) * density;
+
+	vec3 shape_uv = pos * settings.shape_scale;
+	float shape = texture(u_cloud_shape_texture, shape_uv).r;
+	shape = (shape * settings.shape_factor + settings.shape_bias) * settings.shape_amount;
+	shape = mix(shape, shape * height_ratio, height_falloff);
+
+	float dc = distance(cam_origin, pos);
+	float detail_falloff = max(1.0 - dc / settings.detail_falloff_distance, 0.0);
+	float detail = 0.0;
+	if (detail_falloff > 0.0) {
+		vec3 detail_uv = pos * settings.detail_scale + vec3(time*0.02, 0.0, 0.0);
+		detail = texture(u_cloud_shape_texture, detail_uv).r;
+		detail = (detail * settings.detail_factor + settings.detail_bias) * settings.detail_amount;
+		detail *= detail_falloff;
+	}
+
+	density = max(density - shape - detail, 0.0);
+
+	return density * settings.density_scale;
+}
+
+const vec3 EXTINCTION_MULT = vec3(0.8, 0.8, 1.0);
+
+// Adapted from: https://twitter.com/FewesW/status/1364629939568451587/photo/1
+vec3 multi_octave_scatter(float density, float mu) {
+	float attenuation = 0.2;
+	float contribution = 0.2;
+	float phase_attenuation = 0.5;
+
+	float a = 1.0;
+	float b = 1.0;
+	float c = 1.0;
+	float g = 0.85;
+	const int scattering_octaves = 4;
+
+	vec3 luminance = vec3(0.0);
+
+	for (int i = 0; i < scattering_octaves; ++i) {
+		float phase = phase_function(0.3 * c, mu);
+		vec3 beers = exp(-density * EXTINCTION_MULT * a);
+
+		luminance += b * phase * beers;
+
+		a *= attenuation;
+		b *= contribution;
+		c *= (1.0 - phase_attenuation);
+	}
+
+	return luminance;
+}
+
+vec3 raymarch_light_energy(
+	vec3 ray_origin, 
+	vec3 ray_dir, 
+	vec3 cam_origin, 
+	vec3 cam_dir,
+	float time, 
+	float jitter,
+	CloudSettings settings,
+	int steps
+) {
+	float max_distance = (settings.top_height - settings.bottom_height) * settings.light_reach;
+
+	float step_len = max_distance / float(steps);
+	float total_density = 0.0;
+
+	float dist_travelled = 0.0;
+	// ray_origin += jitter * step_len;
+
+	for (int i = 0; i < steps; ++i) {
+		vec3 pos = ray_origin + ray_dir * dist_travelled;
+
+		Coverage sd1 = sample_sdf_low(pos, settings);
+
+		total_density += sample_density(sd1, pos, cam_origin, time, settings) * step_len;
+		dist_travelled += step_len;
+	}
+
+	total_density *= settings.light_density_scale;
+
+	const float mu = dot(cam_dir, ray_dir);
+
+	vec3 beers_law = multi_octave_scatter(total_density, mu);
+	vec3 powder = 1.0 - exp(-total_density * 2.0 * EXTINCTION_MULT);
+	
+	return beers_law * mix(2.0 * powder, vec3(1.0), mu * 0.5 + 0.5);
+}
+
+float calculate_point_light_energy_factor(vec3 pos, vec4 point_light) {
+	return 1.1 * pow4(max(1.0 - distance(point_light.xyz, pos) / point_light.w, 0.0));
+}
+
 struct CloudResult {
-	float transmittance;
-	float light;
+	vec3 scattering;
+	vec3 transmittance;
 };
 
 CloudResult raymarch_cloud(
@@ -280,58 +395,140 @@ CloudResult raymarch_cloud(
 	float jitter,
 	vec3 sun_dir, 
 	float time, 
-	CloudSettings settings
+	vec3 cam_pos,
+	CloudSettings settings,
+	vec4 point_light
 ) {
-	const int steps = CLOUDS_MAX_RAYMARCH_STEPS;
+	vec3 sun_color = vec3(1.0);
+	const float cloud_light_multiplier = 50.0;
+	vec3 sun_light = sun_color * cloud_light_multiplier;
+	const float ambient_strength = 0.0;
+	vec3 ambient = vec3(ambient_strength * sun_color);
 
-	float inv_steps = 1.0 / float(steps);
-	float step_len = (t_end - t_begin) * inv_steps;
+	const float ray_dist = t_end - t_begin;
+	// const float step_dropoff = linearstep(1.0, 0.0, pow4(dot(vec3(0.0, 1.0, 0.0), ray_dir)));
 
-	float total_transmittance = 1.0;
-	float total_light = 0.0;
+	const float lq_step_len = ray_dist / float(CLOUDS_MAX_RAYMARCH_STEPS);
+	const float hq_step_len = lq_step_len / float(CLOUDS_MAX_RAYMARCH_FSTEPS);
+	const float max_steps = CLOUDS_MAX_RAYMARCH_STEPS * CLOUDS_MAX_RAYMARCH_FSTEPS;
 
-	vec3 pos = ray_origin + jitter * step_len * ray_dir + ray_dir * t_begin;
-	float phase = 1.0; // ?
+	const float offset = lq_step_len * jitter;
+	float dist_travelled = t_begin;
 
-	const int fsteps = CLOUDS_MAX_RAYMARCH_FSTEPS;
-	float fstep_len = step_len / float(fsteps);
+	int hq_marcher_countdown = 0;
 
-	const float opaque_transmittance = 0.01;
+	// TODO Not used?
+	// float previous_step_len = 0.0;
 
-	for (int i = 0; i < steps; ++i) {
-		float density = get_density(pos, time, settings, 0);
-		
-		if (density > 0.0) {
-			pos -= ray_dir * step_len;
+	CloudResult result;
+	result.scattering = vec3(0.0);
+	result.transmittance = vec3(1.0);
 
-			for (int j = 0; j < fsteps; ++j) {
-				float density2 = get_density(pos, time, settings, 2);
+	for (float i = 0.0; i < max_steps; ++i) {
+		// TODO Is this really needed? We already do max steps which is the sum of all potential hq steps
+		if (dist_travelled > t_end) {
+			break;
+		}
 
-				if (density2 > 0.0) {
-					density2 *= settings.density_scale;
-					float light_transmittance = get_light_raymarched(pos, sun_dir, jitter, time, settings);
-					total_light += density2 * fstep_len * total_transmittance * light_transmittance * phase;
+		vec3 pos = ray_origin + dist_travelled * ray_dir;
+		Coverage sd1 = sample_sdf_low(pos, settings);
 
-					float step_transmittance = exp(-density2 * fstep_len);
-					total_transmittance *= step_transmittance;
+		float current_step_len = lq_step_len;//sd1;
 
-					if (total_transmittance < opaque_transmittance) {
-						break;
-					}
-				}
-
-				pos += ray_dir * fstep_len;
-			}
-
-			if (total_transmittance < opaque_transmittance) {
-				break;
+		if (hq_marcher_countdown <= 0) {
+			if (sd1.combined < hq_step_len) {
+				// Hit some clouds, step back
+				hq_marcher_countdown = CLOUDS_MAX_RAYMARCH_FSTEPS;
+				dist_travelled += hq_step_len * jitter;
+			} else {
+				dist_travelled += current_step_len;
+				continue;
 			}
 		}
 
-		pos += ray_dir * step_len;
+		if (hq_marcher_countdown > 0) {
+			--hq_marcher_countdown;
+
+			if (sd1.combined < 0.0) {
+				hq_marcher_countdown = CLOUDS_MAX_RAYMARCH_FSTEPS;
+
+				float extinction = sample_density(sd1, pos, cam_pos, time, settings);
+
+				if (extinction > 0.01) {
+					vec3 light_energy = vec3(0.0);
+
+					float planet_shadow = get_planet_shadow(pos, settings.ground_height, sun_dir);
+
+					// Sun light
+					if (planet_shadow > 0.0) {
+						light_energy += planet_shadow * raymarch_light_energy(
+							pos, 
+							sun_dir, 
+							cam_pos, 
+							ray_dir, 
+							time, 
+							jitter, 
+							settings, 
+							CLOUDS_LIGHT_RAYMARCH_STEPS
+						);
+					}
+
+					// Point lights
+					// light_energy += calculate_point_light_energy(pos, point_light);
+					// TODO Option to disable raymarching
+					float pt_light_energy_f = calculate_point_light_energy_factor(pos, point_light);
+					if (pt_light_energy_f > 0.0) {
+						light_energy += vec3(0.6, 0.8, 1.0) * pt_light_energy_f * raymarch_light_energy(
+							pos, 
+							normalize(point_light.xyz - pos), 
+							cam_pos, 
+							ray_dir, 
+							time, 
+							jitter, 
+							settings, 
+							CLOUDS_SECONDARY_LIGHT_RAYMARCH_STEPS
+						);
+					}
+
+					// Night light
+					// TODO Option to use cheap height light?
+					if (planet_shadow < 1.0) {
+						light_energy += 0.005 * raymarch_light_energy(
+							pos, 
+							normalize(pos), 
+							cam_pos, 
+							ray_dir, 
+							time, 
+							jitter, 
+							settings,
+							CLOUDS_SECONDARY_LIGHT_RAYMARCH_STEPS
+						);
+					}
+
+					vec3 luminance = ambient + sun_light * light_energy;
+					vec3 transmittance = exp(-extinction * hq_step_len * EXTINCTION_MULT);
+					vec3 integ_scatt = extinction * (luminance - luminance * transmittance) / extinction;
+
+					result.scattering += result.transmittance * integ_scatt;
+					result.transmittance *= transmittance;
+
+					if (length(result.transmittance) <= 0.01) {
+						result.transmittance = vec3(0.0);
+						break;
+					}
+				}
+			}
+
+			dist_travelled += hq_step_len;
+		}
+
+		// previous_step_len = current_step_len;
 	}
 
-	return CloudResult(total_transmittance, total_light);
+	const vec3 cloud_color = vec3(1.0);
+	result.scattering = result.scattering * cloud_color;
+	result.transmittance = clamp(result.transmittance, vec3(0.0), vec3(1.0));
+	return result;
 }
 
 void render_clouds(
@@ -345,7 +542,8 @@ void render_clouds(
 	vec3 sun_dir_viewspace,
 	float jitter,
     float time,
-    CloudSettings cloud_settings
+    CloudSettings cloud_settings,
+	vec4 point_light
 ) {
 	vec2 rs_clouds_top = ray_sphere(planet_center_viewspace, cloud_settings.top_height, ray_origin, ray_dir);
 
@@ -372,6 +570,7 @@ void render_clouds(
 			vec3 ray_origin_model = (view_to_model_matrix * vec4(ray_origin, 1.0)).xyz;
 			vec3 ray_dir_model = (view_to_model_matrix * vec4(ray_dir, 0.0)).xyz;
 			vec3 sun_dir_model = (view_to_model_matrix * vec4(sun_dir_viewspace, 0.0)).xyz;
+			vec3 cam_pos_model = (view_to_model_matrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
 
 			CloudResult rr = raymarch_cloud(
 				ray_origin_model, 
@@ -381,12 +580,13 @@ void render_clouds(
                 jitter, 
                 sun_dir_model,
 				time, 
-                cloud_settings
+				cam_pos_model,
+                cloud_settings,
+				point_light
             );
 
-			vec3 light_color = vec3(1.0, 1.0, 1.0);
-			vec3 cloud_color = rr.light * light_color;
-			inout_color.rgb = inout_color.rgb * rr.transmittance + cloud_color;
+			const float exposure = 1.0;
+			inout_color.rgb = inout_color.rgb * rr.transmittance + rr.scattering * exposure;
 		}
 	}
 }
@@ -460,12 +660,18 @@ void main() {
         );
 
 		float time = u_pc_params.time;
+		float frame = u_pc_params.frame;
 
 		// Blue noise doesn't have low-frequency patterns, it looks less "noisy"
 		// http://momentsingraphics.de/BlueNoise.html
-		float jitter = texelFetch(u_blue_noise_texture, (fragcoord + ivec2(time * 100.0)) & ivec2(0xff), 0).r;
-//		jitter = 0.0;
-		// jitter = fract(time);
+		ivec2 blue_noise_uv = (fragcoord + ivec2(time * 100.0)) & ivec2(0xff);
+		// ivec2 blue_noise_uv = fragcoord & ivec2(0xff);
+		float jitter = texelFetch(u_blue_noise_texture, blue_noise_uv, 0).r;
+
+		// Animating Noise For Integration Over Time
+		// https://blog.demofox.org/2017/10/31/animating-noise-for-integration-over-time/		
+		// const float golden_ratio = 1.61803398875;
+		// jitter = fract(jitter + float(int(frame) % 32) * golden_ratio);
 
 		// vec4 atmosphere = compute_atmosphere_v2(ray_origin, ray_dir, in_v_planet_center_viewspace,
 		// 	t_begin, t_end, linear_depth, sun_dir, jitter);
@@ -476,24 +682,25 @@ void main() {
 		vec2 cloud_coverage_rotation_x = u_pc_params.cloud_coverage_rotation_x;
 		mat2 cloud_coverage_rotation = mat2(cloud_coverage_rotation_x, vec2_rotate_90(cloud_coverage_rotation_x));
 
-        CloudSettings cloud_settings;
-        cloud_settings.bottom_height =        u_params.planet_radius + u_params.cloud_bottom * u_params.atmosphere_height;
-        cloud_settings.top_height =           u_params.planet_radius + u_params.cloud_top * u_params.atmosphere_height;
-        cloud_settings.density_scale =        u_params.cloud_density_scale;
-        cloud_settings.light_density_scale =  u_params.cloud_light_density_scale;
-        cloud_settings.light_reach =          u_params.cloud_light_reach;
-        cloud_settings.ground_height =        u_params.planet_radius;
-        cloud_settings.coverage_rotation =    cloud_coverage_rotation;
-        cloud_settings.coverage_factor =      u_params.cloud_coverage_factor;
-        cloud_settings.coverage_bias =        u_params.cloud_coverage_bias;
-        cloud_settings.shape_factor =         u_params.cloud_shape_factor;
-        cloud_settings.shape_bias =           u_params.cloud_shape_bias;
-        cloud_settings.shape_scale =          u_params.cloud_shape_scale;
-        cloud_settings.shape_amount =         u_params.cloud_shape_amount;
-        cloud_settings.detail_factor =        u_params.cloud_detail_factor;
-        cloud_settings.detail_bias =          u_params.cloud_detail_bias;
-        cloud_settings.detail_scale =         u_params.cloud_detail_scale;
-        cloud_settings.detail_amount =        u_params.cloud_detail_amount;
+        CloudSettings cs;
+        cs.bottom_height =            u_params.planet_radius + u_params.cloud_bottom * u_params.atmosphere_height;
+        cs.top_height =               u_params.planet_radius + u_params.cloud_top * u_params.atmosphere_height;
+        cs.density_scale =            u_params.cloud_density_scale;
+        cs.light_density_scale =      u_params.cloud_light_density_scale;
+        cs.light_reach =              u_params.cloud_light_reach;
+        cs.ground_height =            u_params.planet_radius;
+        cs.coverage_rotation =        cloud_coverage_rotation;
+        cs.coverage_factor =          u_params.cloud_coverage_factor;
+        cs.coverage_bias =            u_params.cloud_coverage_bias;
+        cs.shape_factor =             u_params.cloud_shape_factor;
+        cs.shape_bias =               u_params.cloud_shape_bias;
+        cs.shape_scale =              u_params.cloud_shape_scale;
+        cs.shape_amount =             u_params.cloud_shape_amount;
+        cs.detail_factor =            u_params.cloud_detail_factor;
+        cs.detail_bias =              u_params.cloud_detail_bias;
+        cs.detail_scale =             u_params.cloud_detail_scale;
+        cs.detail_amount =            u_params.cloud_detail_amount;
+        cs.detail_falloff_distance =  u_params.cloud_detail_falloff_distance;
 
         render_clouds(
 			color,
@@ -506,7 +713,13 @@ void main() {
             sun_dir_viewspace,
             jitter,
             time,
-            cloud_settings
+            cs,
+			vec4(
+				u_params.point_light_pos_x,
+				u_params.point_light_pos_y,
+				u_params.point_light_pos_z,
+				u_params.point_light_radius
+			)
         );
 	}
 	// float nonlinear_depth = texture(u_depth_texture, screen_uv).x;
