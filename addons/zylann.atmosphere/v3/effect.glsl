@@ -53,11 +53,12 @@ layout(binding = 2) uniform sampler2D u_depth_texture;
 layout(binding = 3) uniform samplerCube u_cloud_coverage_cubemap;
 // Precomputed noise used to shape the clouds, tiling seamlessly
 layout(binding = 4) uniform sampler3D u_cloud_shape_texture;
+layout(binding = 5) uniform sampler3D u_cloud_detail_texture;
 // Blue noise used for dithering
-layout(binding = 5) uniform sampler2D u_blue_noise_texture;
+layout(binding = 6) uniform sampler2D u_blue_noise_texture;
 
 // Parameters that don't change every frame
-layout (binding = 6) uniform Params {
+layout (binding = 7) uniform Params {
     mat4 world_to_model_matrix;
     
 	float planet_radius;
@@ -94,7 +95,7 @@ layout (binding = 6) uniform Params {
 } u_params;
 
 // Camera
-layout (binding = 7) uniform CamParams {
+layout (binding = 8) uniform CamParams {
     mat4 inv_view_matrix;
     mat4 inv_projection_matrix;
 } u_cam_params;
@@ -295,7 +296,7 @@ float sample_density(Coverage base, vec3 pos, vec3 cam_origin, float time, Cloud
 	float detail = 0.0;
 	if (detail_falloff > 0.0) {
 		vec3 detail_uv = pos * settings.detail_scale + vec3(time*0.02, 0.0, 0.0);
-		detail = texture(u_cloud_shape_texture, detail_uv).r;
+		detail = texture(u_cloud_detail_texture, detail_uv).r;
 		detail = (detail * settings.detail_factor + settings.detail_bias) * settings.detail_amount;
 		detail *= detail_falloff;
 	}

@@ -74,10 +74,9 @@ var _last_screen_resolution := Vector2i()
 const _shader_file = preload("./effect.glsl")
 const _post_shader_file = preload("./post.glsl")
 const _cloud_coverage_cubemap = preload("res://tests/cloud_coverage_2.png")
-const _cloud_shape_texture = \
+const _cloud_shape_texture = preload("res://tests/swirly.tres")
+const _cloud_detail_texture = \
 	preload("res://addons/zylann.atmosphere/demo/cloud_shape_texture3d.tres")
-#const _cloud_shape_texture = \
-	#preload("res://tests/swirly.tres")
 const _blue_noise_texture = preload("res://addons/zylann.atmosphere/blue_noise.png")
 
 const _callback_type := EFFECT_CALLBACK_TYPE_PRE_TRANSPARENT
@@ -387,23 +386,32 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 		cloud_shape_texture_uniform.binding = 4
 		cloud_shape_texture_uniform.add_id(_linear_sampler)
 		cloud_shape_texture_uniform.add_id(cloud_shape_texture_rd)
+
+		var cloud_detail_texture_rd := \
+			RenderingServer.texture_get_rd_texture(_cloud_detail_texture.get_rid())
+		var cloud_detail_texture_uniform := RDUniform.new()
+		cloud_detail_texture_uniform.uniform_type = \
+			RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+		cloud_detail_texture_uniform.binding = 5
+		cloud_detail_texture_uniform.add_id(_linear_sampler)
+		cloud_detail_texture_uniform.add_id(cloud_detail_texture_rd)
 		
 		var blue_noise_texture_rd := \
 			RenderingServer.texture_get_rd_texture(_blue_noise_texture.get_rid())
 		var blue_noise_texture_uniform := RDUniform.new()
 		blue_noise_texture_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
-		blue_noise_texture_uniform.binding = 5
+		blue_noise_texture_uniform.binding = 6
 		blue_noise_texture_uniform.add_id(_linear_sampler)
 		blue_noise_texture_uniform.add_id(blue_noise_texture_rd)
 		
 		var params_uniform := RDUniform.new()
 		params_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_UNIFORM_BUFFER
-		params_uniform.binding = 6
+		params_uniform.binding = 7
 		params_uniform.add_id(_params_ubo)
 
 		var cam_params_uniform := RDUniform.new()
 		cam_params_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_UNIFORM_BUFFER
-		cam_params_uniform.binding = 7
+		cam_params_uniform.binding = 8
 		cam_params_uniform.add_id(_cam_params_ubo)
 		
 		var uniform_set_items : Array[RDUniform]
@@ -414,6 +422,7 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 				depth_texture_uniform,
 				cloud_coverage_cubemap_uniform,
 				cloud_shape_texture_uniform,
+				cloud_detail_texture_uniform,
 				blue_noise_texture_uniform,
 				params_uniform,
 				cam_params_uniform
@@ -425,6 +434,7 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 				depth_texture_uniform,
 				cloud_coverage_cubemap_uniform,
 				cloud_shape_texture_uniform,
+				cloud_detail_texture_uniform,
 				blue_noise_texture_uniform,
 				params_uniform,
 				cam_params_uniform
