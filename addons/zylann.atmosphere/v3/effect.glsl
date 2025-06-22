@@ -196,6 +196,10 @@ float band_p2s(float x, float w, float s) {
 	return band_p2s_unit(x / w, s);
 }
 
+float length_sq_vec3(vec3 v) {
+	return dot(v, v);
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Clouds
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -560,17 +564,18 @@ CloudResult render_clouds(
 			// This saves 0.5ms in ground views on a 1060
 			&& (linear_depth > rs_clouds_bottom.y || rs_clouds_bottom.x > 0.0)
 		) {
+			mat4 view_to_model_matrix = world_to_model_matrix * inv_view_matrix;
+			vec3 cam_pos_model = (view_to_model_matrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+
 			// When under the cloud layer, this improves quality significantly,
 			// unfortunately entering the cloud layer causes a jarring transition
-			// if (rs_clouds_bottom.x < 0.0) {
-			// 	cloud_rs.x = rs_clouds_bottom.y;
-			// }
+			if (length_sq_vec3(cam_pos_model) < pow2(cloud_settings.bottom_height)) {
+				cloud_rs.x = rs_clouds_bottom.y;
+			}
 
-			mat4 view_to_model_matrix = world_to_model_matrix * inv_view_matrix;
 			vec3 ray_origin_model = (view_to_model_matrix * vec4(ray_origin, 1.0)).xyz;
 			vec3 ray_dir_model = (view_to_model_matrix * vec4(ray_dir, 0.0)).xyz;
 			vec3 sun_dir_model = (view_to_model_matrix * vec4(sun_dir_viewspace, 0.0)).xyz;
-			vec3 cam_pos_model = (view_to_model_matrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
 
 			CloudResult rr = raymarch_cloud(
 				ray_origin_model, 
