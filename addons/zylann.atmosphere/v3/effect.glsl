@@ -97,9 +97,9 @@ layout (binding = 8) uniform Params {
 
 	float night_light_energy;
 
-	float reserved0;
-	float reserved1;
-	float reserved2;
+	float cloud_scattering_r;
+	float cloud_scattering_g;
+	float cloud_scattering_b;
 } u_params;
 
 // Camera
@@ -376,6 +376,8 @@ struct CloudSettings {
 	float detail_scale;
 	float detail_amount;
 	float detail_falloff_distance;
+
+	vec3 scattering_coefficients;
 };
 
 float get_planet_shadow(vec3 pos, float planet_radius, vec3 sun_dir) {
@@ -457,10 +459,8 @@ float sample_density(Coverage base, vec3 pos, vec3 cam_origin, float time, Cloud
 	return density * settings.density_scale;
 }
 
-const vec3 EXTINCTION_MULT = vec3(0.8, 0.8, 1.0);
-
 // Adapted from: https://twitter.com/FewesW/status/1364629939568451587/photo/1
-vec3 multi_octave_scatter(float density, float mu) {
+vec3 multi_octave_scatter(float density, float mu, vec3 scattering_coefficients) {
 	float attenuation = 0.2;
 	float contribution = 0.2;
 	float phase_attenuation = 0.5;
@@ -475,7 +475,7 @@ vec3 multi_octave_scatter(float density, float mu) {
 
 	for (int i = 0; i < scattering_octaves; ++i) {
 		float phase = phase_function(0.3 * c, mu);
-		vec3 beers = exp(-density * EXTINCTION_MULT * a);
+		vec3 beers = exp(-density * scattering_coefficients * a);
 
 		luminance += b * phase * beers;
 
@@ -518,8 +518,8 @@ vec3 raymarch_light_energy(
 
 	const float mu = dot(cam_dir, ray_dir);
 
-	vec3 beers_law = multi_octave_scatter(total_density, mu);
-	vec3 powder = 1.0 - exp(-total_density * 2.0 * EXTINCTION_MULT);
+	vec3 beers_law = multi_octave_scatter(total_density, mu, settings.scattering_coefficients);
+	vec3 powder = 1.0 - exp(-total_density * 2.0 * settings.scattering_coefficients);
 	
 	return beers_law * mix(2.0 * powder, vec3(1.0), mu * 0.5 + 0.5);
 }
@@ -684,7 +684,7 @@ CloudResult raymarch_cloud(
 					}
 
 					vec3 luminance = ambient + sun_light * light_energy;
-					vec3 transmittance = exp(-extinction * step_len * EXTINCTION_MULT);
+					vec3 transmittance = exp(-extinction * step_len * settings.scattering_coefficients);
 					vec3 integ_scatt = luminance * (1.0 - transmittance);
 
 					result.scattering += result.transmittance * integ_scatt;
@@ -950,6 +950,11 @@ void main() {
         cs.detail_scale =             u_params.cloud_detail_scale;
         cs.detail_amount =            u_params.cloud_detail_amount;
         cs.detail_falloff_distance =  u_params.cloud_detail_falloff_distance;
+		cs.scattering_coefficients =  vec3(
+			u_params.cloud_scattering_r,
+			u_params.cloud_scattering_g,
+			u_params.cloud_scattering_b
+		);
 
         cr = render_clouds(
             planet_center_viewspace,
