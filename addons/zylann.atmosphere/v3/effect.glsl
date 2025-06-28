@@ -29,7 +29,6 @@
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 //#define FULL_RES
-// #define ATMO_MIX_V1
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -269,16 +268,6 @@ struct AtmoResult {
 	float transmittance;
 	vec3 scattering;
 };
-
-#ifdef ATMO_MIX_V1
-struct AtmoIntegration {
-	float view_ray_optical_depth;
-};
-
-AtmoIntegration AtmoIntegration_init() {
-	return AtmoIntegration(0.0);
-}
-#endif
 
 AtmoResult compute_atmosphere(
 	vec3 ray_origin,
@@ -537,20 +526,13 @@ float calculate_point_light_energy_factor(vec3 pos, vec4 point_light) {
 struct CloudResult {
 	vec3 scattering;
 	vec3 transmittance;
-#ifdef ATMO_MIX_V1
-	vec3 cloud_only_transmittance;
-#endif
 	float depth;
 };
 
 const float CloudResult_MAX_DEPTH = 999999.0;
 
 CloudResult default_cloud_result() {
-#ifdef ATMO_MIX_V1
-	return CloudResult(vec3(0.0), vec3(1.0), vec3(1.0), CloudResult_MAX_DEPTH);
-#else
 	return CloudResult(vec3(0.0), vec3(1.0), CloudResult_MAX_DEPTH);
-#endif
 }
 
 CloudResult raymarch_cloud(
@@ -565,10 +547,6 @@ CloudResult raymarch_cloud(
 	CloudSettings settings,
 	vec4 point_light,
 	float night_light_energy
-#ifdef ATMO_MIX_V1
-	,AtmosphereSettings atmo,
-	inout AtmoIntegration atmo_integ
-#endif
 ) {
 	vec3 sun_color = vec3(1.0);
 	const float cloud_light_multiplier = 50.0;
@@ -622,12 +600,6 @@ CloudResult raymarch_cloud(
 
 // 			} else {
 // 				dist_travelled += lq_step_len;
-
-// #ifdef ATMO_MIX_V1
-// 				AtmoResult ar = integrate_atmosphere(pos, sun_dir, vec3(0.0), lq_step_len, atmo_integ, atmo);
-// 				result.scattering += result.cloud_only_transmittance * ar.scattering;
-// 				result.transmittance *= ar.transmittance;
-// #endif
 // 				continue;
 // 			}
 // 		}
@@ -698,15 +670,9 @@ CloudResult raymarch_cloud(
 
 					result.scattering += result.transmittance * integ_scatt;
 					result.transmittance *= transmittance;
-#ifdef ATMO_MIX_V1
-					result.cloud_only_transmittance *= transmittance;
-#endif
 
 					if (max_vec3_component(result.transmittance) <= break_transmittance) {
 						result.transmittance = vec3(0.0);
-#ifdef ATMO_MIX_V1
-						result.cloud_only_transmittance = vec3(0.0);
-#endif
 						break;
 					}
 
@@ -720,16 +686,10 @@ CloudResult raymarch_cloud(
 				}
 			}
 
-#ifdef ATMO_MIX_V1
-			AtmoResult ar = integrate_atmosphere(pos, sun_dir, vec3(0.0), step_len, atmo_integ, atmo);
-			result.scattering += result.cloud_only_transmittance * ar.scattering;
-			result.transmittance *= ar.transmittance;
-#endif
 
 			dist_travelled += step_len;
 		}
 
-		// previous_step_len = current_step_len;
 	}
 
 	const vec3 cloud_color = vec3(1.0);
@@ -759,16 +719,10 @@ CloudResult render_clouds(
     CloudSettings cloud_settings,
 	vec4 point_light,
 	float night_light_energy
-#ifdef ATMO_MIX_V1
-	,AtmosphereSettings atmo
-#endif
 ) {
 	vec2 rs_clouds_top = ray_sphere(planet_center_viewspace, cloud_settings.top_height, ray_origin, ray_dir);
 
 	CloudResult result = default_cloud_result();
-#ifdef ATMO_MIX_V1
-	AtmoIntegration atmo_integ = AtmoIntegration_init();
-#endif
 
 	if (rs_clouds_top.x != rs_clouds_top.y) {
 		vec2 rs_clouds_bottom = ray_sphere(planet_center_viewspace, cloud_settings.bottom_height, ray_origin, ray_dir);
@@ -793,22 +747,6 @@ CloudResult render_clouds(
 			// unfortunately entering the cloud layer causes a jarring transition
 			if (length_sq_vec3(cam_pos_model) < pow2(cloud_settings.bottom_height)) {
 				cloud_rs.x = rs_clouds_bottom.y;
-
-#ifdef ATMO_MIX_V1
-				AtmoResult ar = compute_atmosphere2(
-					ray_origin_model,
-					ray_dir_model,
-					vec3(0.0),
-					max(rs_clouds_bottom.x, 0.0),
-					min(rs_clouds_bottom.y, linear_depth),
-					sun_dir_model,
-					jitter,
-					atmo,
-					atmo_integ
-				);
-				result.scattering += ar.scattering;
-				result.transmittance *= ar.transmittance;
-#endif
 			}
 
 			CloudResult rr = raymarch_cloud(
@@ -823,10 +761,6 @@ CloudResult render_clouds(
                 cloud_settings,
 				point_light,
 				night_light_energy
-#ifdef ATMO_MIX_V1
-				,atmo,
-				atmo_integ
-#endif
             );
 
 			// rr.scattering = color_curve(rr.scattering);
@@ -835,12 +769,7 @@ CloudResult render_clouds(
 			// inout_color.rgb = inout_color.rgb * rr.transmittance + rr.scattering * exposure;
 			// result = rr;
 
-#ifdef ATMO_MIX_V1
-			result.scattering += result.transmittance * rr.scattering;
-			result.transmittance *= rr.transmittance;
-#else
 			result = rr;
-#endif
 		}
 	}
 
@@ -988,9 +917,6 @@ void main() {
 				u_params.point_light_radius
 			),
 			u_params.night_light_energy
-#ifdef ATMO_MIX_V1
-			,atmo
-#endif
         );
 
 		// AtmoIntegration atmo_integ = AtmoIntegration_init();
