@@ -588,108 +588,84 @@ CloudResult raymarch_cloud(
 
 		vec3 pos = ray_origin + dist_travelled * ray_dir;
 		Coverage sd1 = sample_sdf_low(pos, settings);
-		// float extinction0 = sample_density(sd1, pos, cam_pos, time, settings);
 
-// 		if (hq_marcher_countdown <= 0) {
-// 			if (extinction0 > 0.0) {
-// 			// if (true) {
-// 				// Hit some clouds, step back
-// 				hq_marcher_countdown = CLOUDS_MAX_RAYMARCH_FSTEPS;
-// 				// dist_travelled -= lq_step_len;
-// 				dist_travelled += hq_step_len * jitter;
+		if (sd1.combined < 0.0) {
+			float extinction = sample_density(sd1, pos, cam_pos, time, settings);
 
-// 			} else {
-// 				dist_travelled += lq_step_len;
-// 				continue;
-// 			}
-// 		}
+			if (extinction > 0.01) {
+				vec3 light_energy = vec3(0.0);
 
-		// if (hq_marcher_countdown > 0) {
-		if (true) {
-			// --hq_marcher_countdown;
+				float planet_shadow = get_planet_shadow(pos, settings.ground_height, sun_dir);
 
-			if (sd1.combined < 0.0) {
-				// hq_marcher_countdown = CLOUDS_MAX_RAYMARCH_FSTEPS;
-
-				float extinction = sample_density(sd1, pos, cam_pos, time, settings);
-
-				if (extinction > 0.01) {
-					vec3 light_energy = vec3(0.0);
-
-					float planet_shadow = get_planet_shadow(pos, settings.ground_height, sun_dir);
-
-					// Sun light
-					if (planet_shadow > 0.0) {
-						light_energy += planet_shadow * raymarch_light_energy(
-							pos, 
-							sun_dir, 
-							cam_pos, 
-							ray_dir, 
-							time, 
-							jitter, 
-							settings, 
-							settings.main_light_steps
-						);
-					}
-
-					// Point lights
-					// light_energy += calculate_point_light_energy(pos, point_light);
-					// TODO Option to disable raymarching
-					float pt_light_energy_f = calculate_point_light_energy_factor(pos, point_light);
-					if (pt_light_energy_f > 0.0) {
-						light_energy += vec3(0.6, 0.8, 1.0) * pt_light_energy_f * raymarch_light_energy(
-							pos, 
-							normalize(point_light.xyz - pos), 
-							cam_pos, 
-							ray_dir, 
-							time, 
-							jitter, 
-							settings, 
-							settings.secondary_light_steps
-						);
-					}
-
-					// Night light
-					// TODO Option to use cheap height light?
-					if (planet_shadow < 1.0) {
-						light_energy += night_light_energy * raymarch_light_energy(
-							pos, 
-							normalize(pos), 
-							cam_pos, 
-							ray_dir, 
-							time, 
-							jitter, 
-							settings,
-							settings.secondary_light_steps
-						);
-					}
-
-					vec3 luminance = ambient + sun_light * light_energy;
-					vec3 transmittance = exp(-extinction * step_len * settings.scattering_coefficients);
-					vec3 integ_scatt = luminance * (1.0 - transmittance);
-
-					result.scattering += result.transmittance * integ_scatt;
-					result.transmittance *= transmittance;
-
-					if (max_vec3_component(result.transmittance) <= break_transmittance) {
-						result.transmittance = vec3(0.0);
-						break;
-					}
-
-					if (extinction > 0.1) {
-						// TODO Use dist_travelled?
-						result.depth = min(result.depth, distance(ray_origin, pos));
-					}
-
-				} else {
-					step_len = hq_step_len;
+				// Sun light
+				if (planet_shadow > 0.0) {
+					light_energy += planet_shadow * raymarch_light_energy(
+						pos, 
+						sun_dir, 
+						cam_pos, 
+						ray_dir, 
+						time, 
+						jitter, 
+						settings, 
+						settings.main_light_steps
+					);
 				}
+
+				// Point lights
+				// light_energy += calculate_point_light_energy(pos, point_light);
+				// TODO Option to disable raymarching
+				float pt_light_energy_f = calculate_point_light_energy_factor(pos, point_light);
+				if (pt_light_energy_f > 0.0) {
+					light_energy += vec3(0.6, 0.8, 1.0) * pt_light_energy_f * raymarch_light_energy(
+						pos, 
+						normalize(point_light.xyz - pos), 
+						cam_pos, 
+						ray_dir, 
+						time, 
+						jitter, 
+						settings, 
+						settings.secondary_light_steps
+					);
+				}
+
+				// Night light
+				// TODO Option to use cheap height light?
+				if (planet_shadow < 1.0) {
+					light_energy += night_light_energy * raymarch_light_energy(
+						pos, 
+						normalize(pos), 
+						cam_pos, 
+						ray_dir, 
+						time, 
+						jitter, 
+						settings,
+						settings.secondary_light_steps
+					);
+				}
+
+				vec3 luminance = ambient + sun_light * light_energy;
+				vec3 transmittance = exp(-extinction * step_len * settings.scattering_coefficients);
+				vec3 integ_scatt = luminance * (1.0 - transmittance);
+
+				result.scattering += result.transmittance * integ_scatt;
+				result.transmittance *= transmittance;
+
+				if (max_vec3_component(result.transmittance) <= break_transmittance) {
+					result.transmittance = vec3(0.0);
+					break;
+				}
+
+				if (extinction > 0.1) {
+					// TODO Use dist_travelled?
+					result.depth = min(result.depth, distance(ray_origin, pos));
+				}
+
+			} else {
+				step_len = hq_step_len;
 			}
-
-
-			dist_travelled += step_len;
 		}
 
+		dist_travelled += step_len;
 	}
 
 	const vec3 cloud_color = vec3(1.0);
@@ -749,7 +725,7 @@ CloudResult render_clouds(
 				cloud_rs.x = rs_clouds_bottom.y;
 			}
 
-			CloudResult rr = raymarch_cloud(
+			result = raymarch_cloud(
 				ray_origin_model, 
                 ray_dir_model, 
                 cloud_rs.x, 
@@ -762,14 +738,6 @@ CloudResult render_clouds(
 				point_light,
 				night_light_energy
             );
-
-			// rr.scattering = color_curve(rr.scattering);
-
-			// const float exposure = 1.0;
-			// inout_color.rgb = inout_color.rgb * rr.transmittance + rr.scattering * exposure;
-			// result = rr;
-
-			result = rr;
 		}
 	}
 
