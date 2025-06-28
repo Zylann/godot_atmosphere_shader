@@ -9,6 +9,8 @@ extends CompositorEffect
 @export var model_transform := Transform3D()
 @export var planet_radius := 100.0
 @export var atmosphere_height := 20.0
+@export var atmosphere_density := 0.2
+@export_range(0.0, 1.0, 0.01) var atmosphere_scattering_strength := 1.0
 
 @export_group("Light sources")
 @export var sun_direction := Vector3(0.0, -1.0, 0.0)
@@ -43,10 +45,110 @@ extends CompositorEffect
 @export_range(0.0, 1.0) var clouds_detail_amount := 0.5
 @export var clouds_detail_falloff_distance := 100.0
 
+@export_group("Debug")
+@export var debug_value := 0.0;
+
+
 class PointLightInfo:
 	var position := Vector3()
 	var radius := 10.0
 	#var enabled := true
+
+
+class OpticalDepth:
+	const _shader_file = preload("./optical_depth.glsl")
+	const _resolution = Vector2i(256, 256)
+
+	var dirty := true
+	var shader_dirty := true
+
+	var _shader_rid := RID()
+	var _pipeline_rid := RID()
+	var _texture_rid := RID()
+
+
+	func init(rd: RenderingDevice) -> void:
+		var format0 := RDTextureFormat.new()
+		format0.width = _resolution.x
+		format0.height = _resolution.y
+		format0.format = RenderingDevice.DATA_FORMAT_R32_SFLOAT
+		format0.usage_bits = \
+			RenderingDevice.TEXTURE_USAGE_STORAGE_BIT | \
+			RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT
+		_texture_rid = rd.texture_create(format0, RDTextureView.new(), [])
+	
+
+	func get_texture_rid() -> RID:
+		return _texture_rid
+
+
+	func update_shader(rd: RenderingDevice) -> bool:
+		if not shader_dirty:
+			return true
+		shader_dirty = false
+
+		var shader_spirv := _shader_file.get_spirv()
+		if shader_spirv.compile_error_compute != "":
+			return false
+		_shader_rid = rd.shader_create_from_spirv(shader_spirv)
+		if not _shader_rid.is_valid():
+			return false
+		_pipeline_rid = rd.compute_pipeline_create(_shader_rid)
+		if not _pipeline_rid.is_valid():
+			return false
+		
+		return true
+
+
+	func deinit(rd: RenderingDevice) -> void:
+		if _shader_rid.is_valid():
+			rd.free_rid(_shader_rid)
+			_shader_rid = RID()
+
+		if _texture_rid.is_valid():
+			rd.free_rid(_texture_rid)
+			_texture_rid = RID()
+
+
+	func render(rd: RenderingDevice, fx: PlanetAtmosphereEffect) -> void:
+		print("Rendering optical depth")
+
+		var cs_groups := Vector3i(
+			PlanetAtmosphereEffect.ceildiv(_resolution.x, 8),
+			PlanetAtmosphereEffect.ceildiv(_resolution.y, 8),
+			1
+		)
+
+		var push_constant = PackedFloat32Array()
+		push_constant.append(_resolution.x)
+		push_constant.append(_resolution.y)
+		push_constant.append(fx.planet_radius)
+		push_constant.append(fx.atmosphere_height)
+		push_constant.append(fx.atmosphere_density)
+		push_constant.append(0.0) # Padding
+		push_constant.append(0.0) # Padding
+		push_constant.append(0.0) # Padding
+
+		var output_image_uniform = RDUniform.new()
+		output_image_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+		output_image_uniform.binding = 0
+		output_image_uniform.add_id(_texture_rid)
+
+		var uniform_set_items: Array[RDUniform] = [
+			output_image_uniform
+		]
+		
+		var uniform_set := UniformSetCacheRD.get_cache(_shader_rid, 0, uniform_set_items)
+		
+		var compute_list := rd.compute_list_begin()
+		rd.compute_list_bind_compute_pipeline(compute_list, _pipeline_rid)
+		rd.compute_list_bind_uniform_set(compute_list, uniform_set, 0)
+		var push_constant_bytes := push_constant.to_byte_array()
+		rd.compute_list_set_push_constant(compute_list, push_constant_bytes, push_constant_bytes.size())
+		rd.compute_list_dispatch(compute_list, cs_groups.x, cs_groups.y, cs_groups.z)
+		# rd.compute_list_add_barrier(compute_list)
+		rd.compute_list_end()
+
 
 var _dirty: bool = true
 var _mutex: Mutex
@@ -60,6 +162,7 @@ var _post_shader_rid: RID
 var _post_pipeline_rid: RID
 
 var _linear_sampler: RID
+var _linear_sampler_clamp: RID
 var _nearest_sampler: RID
 
 var _params_ubo: RID
@@ -71,13 +174,15 @@ var _frame_counter := 0
 var _point_light := PointLightInfo.new()
 var _last_screen_resolution := Vector2i()
 
+var _optical_depth := OpticalDepth.new()
+
 const _shader_file = preload("./effect.glsl")
 const _post_shader_file = preload("./post.glsl")
 const _cloud_coverage_cubemap = preload("res://tests/cloud_coverage_2.png")
 const _cloud_shape_texture = preload("res://tests/swirly.tres")
-const _cloud_detail_texture = \
-	preload("res://addons/zylann.atmosphere/demo/cloud_shape_texture3d.tres")
+const _cloud_detail_texture = preload("res://addons/zylann.atmosphere/demo/cloud_shape_texture3d.tres")
 const _blue_noise_texture = preload("res://addons/zylann.atmosphere/blue_noise.png")
+const _white_texture = preload("res://addons/zylann.atmosphere/white.png")
 
 const _callback_type := EFFECT_CALLBACK_TYPE_PRE_TRANSPARENT
 const _full_res := false
@@ -112,7 +217,15 @@ func _init_render() -> void:
 	ss.repeat_v = RenderingDevice.SAMPLER_REPEAT_MODE_REPEAT
 	ss.repeat_w = RenderingDevice.SAMPLER_REPEAT_MODE_REPEAT
 	_linear_sampler = _rd.sampler_create(ss)
-	
+
+	ss = RDSamplerState.new()
+	ss.min_filter = RenderingDevice.SAMPLER_FILTER_LINEAR
+	ss.mag_filter = RenderingDevice.SAMPLER_FILTER_LINEAR
+	ss.repeat_u = RenderingDevice.SAMPLER_REPEAT_MODE_CLAMP_TO_BORDER
+	ss.repeat_v = RenderingDevice.SAMPLER_REPEAT_MODE_CLAMP_TO_BORDER
+	ss.repeat_w = RenderingDevice.SAMPLER_REPEAT_MODE_CLAMP_TO_BORDER
+	_linear_sampler_clamp = _rd.sampler_create(ss)
+
 	var params_f32 := _make_params_f32()
 	_params_ubo = _rd.uniform_buffer_create(params_f32.size() * 4, params_f32.to_byte_array())
 	
@@ -121,6 +234,8 @@ func _init_render() -> void:
 		cam_params_f32.size() * 4,
 		cam_params_f32.to_byte_array()
 	)
+
+	_optical_depth.init(_rd)
 
 
 func _clear_render() -> void:
@@ -149,6 +264,8 @@ func _clear_render() -> void:
 		_cam_params_ubo = RID()
 	
 	_clear_cloud_buffers()
+
+	_optical_depth.deinit(_rd)
 
 
 func _clear_cloud_buffers() -> void:
@@ -182,6 +299,8 @@ func _notification(what: int) -> void:
 
 			if _cloud_buffer1.is_valid():
 				_rd.free_rid(_cloud_buffer1)
+
+			_optical_depth.deinit(_rd)
 
 
 func _update_shader() -> bool:
@@ -224,7 +343,15 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 
 	if not _update_shader():
 		return
-	
+	if not _optical_depth.update_shader(_rd):
+		return
+
+	_frame_counter += 1
+
+	if _optical_depth.dirty:
+		_optical_depth.dirty = false
+		_optical_depth.render(_rd, self)
+
 	# Get our render scene buffers object, this gives us access to our render buffers.
 	# Note that implementation differs per renderer hence the need for the cast.
 	var render_scene_buffers: RenderSceneBuffersRD = p_render_data.get_render_scene_buffers()
@@ -289,8 +416,6 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 	var sun_center_world := \
 		model_transform.origin - sun_direction * (2.0 * (planet_radius + atmosphere_height))
 	var sun_center_viewspace := world_to_view * sun_center_world
-
-	_frame_counter += 1
 	
 	# Faster than UBO but typically limited in size (128 bytes minimum).
 	# Also needs to be aligned to 16 bytes
@@ -319,7 +444,7 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 	var coverage_rotation_x := Vector2(1.0, 0.0)
 	push_constant.push_back(coverage_rotation_x.x)
 	push_constant.push_back(coverage_rotation_x.y)
-	push_constant.push_back(0.0)
+	push_constant.push_back(debug_value)
 	push_constant.push_back(0.0)
 	
 	var post_push_constant := PackedFloat32Array()
@@ -341,9 +466,9 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 	# # Loop through views just in case we're doing stereo rendering.
 	var view_count := render_scene_buffers.get_view_count()
 	for view_index in view_count:
-		var color_image_uniform : RDUniform
-		var cloud_buffer0_uniform : RDUniform
-		var cloud_buffer1_uniform : RDUniform
+		var color_image_uniform: RDUniform
+		var cloud_buffer0_uniform: RDUniform
+		var cloud_buffer1_uniform: RDUniform
 		
 		var color_image := render_scene_buffers.get_color_layer(view_index)
 		color_image_uniform = RDUniform.new()
@@ -403,18 +528,28 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 		blue_noise_texture_uniform.binding = 6
 		blue_noise_texture_uniform.add_id(_linear_sampler)
 		blue_noise_texture_uniform.add_id(blue_noise_texture_rd)
-		
+
+		var optical_depth_texture_uniform := RDUniform.new()
+		optical_depth_texture_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+		optical_depth_texture_uniform.binding = 7
+		optical_depth_texture_uniform.add_id(_linear_sampler_clamp)
+		# if _frame_counter < 10:
+		# 	var ph := RenderingServer.texture_get_rd_texture(_white_texture.get_rid())
+		# 	optical_depth_texture_uniform.add_id(ph)
+		# else:
+		optical_depth_texture_uniform.add_id(_optical_depth.get_texture_rid())
+
 		var params_uniform := RDUniform.new()
 		params_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_UNIFORM_BUFFER
-		params_uniform.binding = 7
+		params_uniform.binding = 8
 		params_uniform.add_id(_params_ubo)
 
 		var cam_params_uniform := RDUniform.new()
 		cam_params_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_UNIFORM_BUFFER
-		cam_params_uniform.binding = 8
+		cam_params_uniform.binding = 9
 		cam_params_uniform.add_id(_cam_params_ubo)
 		
-		var uniform_set_items : Array[RDUniform]
+		var uniform_set_items: Array[RDUniform]
 		
 		if _full_res:
 			uniform_set_items = [
@@ -424,6 +559,7 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 				cloud_shape_texture_uniform,
 				cloud_detail_texture_uniform,
 				blue_noise_texture_uniform,
+				optical_depth_texture_uniform,
 				params_uniform,
 				cam_params_uniform
 			]
@@ -436,11 +572,12 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 				cloud_shape_texture_uniform,
 				cloud_detail_texture_uniform,
 				blue_noise_texture_uniform,
+				optical_depth_texture_uniform,
 				params_uniform,
 				cam_params_uniform
 			]
 		
-		var post_uniform_set : RID
+		var post_uniform_set: RID
 		if not _full_res:
 			var depth_texture_uniform2 := RDUniform.new()
 			depth_texture_uniform2.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
@@ -474,16 +611,16 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 		var compute_list := _rd.compute_list_begin()
 		_rd.compute_list_bind_compute_pipeline(compute_list, _pipeline_rid)
 		_rd.compute_list_bind_uniform_set(compute_list, uniform_set, 0)
-		var push_constant_bytes = push_constant.to_byte_array()
+		var push_constant_bytes := push_constant.to_byte_array()
 		_rd.compute_list_set_push_constant(
 			compute_list,
 			push_constant_bytes,
 			push_constant_bytes.size()
 		)
 		_rd.compute_list_dispatch(
-			compute_list, 
-			cloud_cs_groups.x, 
-			cloud_cs_groups.y, 
+			compute_list,
+			cloud_cs_groups.x,
+			cloud_cs_groups.y,
 			cloud_cs_groups.z
 		)
 		_rd.compute_list_end()
@@ -492,16 +629,16 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 			var post_compute_list := _rd.compute_list_begin()
 			_rd.compute_list_bind_compute_pipeline(post_compute_list, _post_pipeline_rid)
 			_rd.compute_list_bind_uniform_set(post_compute_list, post_uniform_set, 0)
-			var post_push_constant_bytes = post_push_constant.to_byte_array()
+			var post_push_constant_bytes := post_push_constant.to_byte_array()
 			_rd.compute_list_set_push_constant(
 				post_compute_list,
 				post_push_constant_bytes,
 				post_push_constant_bytes.size()
 			)
 			_rd.compute_list_dispatch(
-				post_compute_list, 
-				post_cs_groups.x, 
-				post_cs_groups.y, 
+				post_compute_list,
+				post_cs_groups.x,
+				post_cs_groups.y,
 				post_cs_groups.z
 			)
 			_rd.compute_list_end()
@@ -515,6 +652,8 @@ func _make_params_f32() -> PackedFloat32Array:
 
 	params_f32.append(planet_radius)
 	params_f32.append(atmosphere_height)
+	params_f32.append(atmosphere_density)
+	params_f32.append(atmosphere_scattering_strength)
 	params_f32.append(clouds_density_scale)
 	params_f32.append(clouds_light_density_scale)
 	params_f32.append(clouds_light_reach)
@@ -540,8 +679,11 @@ func _make_params_f32() -> PackedFloat32Array:
 	params_f32.append(_point_light.radius)
 	
 	params_f32.append(night_light_energy)
+
 	params_f32.append(0.0)
-	
+	params_f32.append(0.0)
+	params_f32.append(0.0)
+
 	#assert(params_f32.size() % 16 == 0)
 	
 	return params_f32

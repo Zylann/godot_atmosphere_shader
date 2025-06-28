@@ -30,11 +30,12 @@
 
 // #define CLOUDS_RAYMARCHED_LIGHTING
 #define CLOUDS_MAX_RAYMARCH_STEPS 24
-#define CLOUDS_MAX_RAYMARCH_FSTEPS 4
-#define CLOUDS_LIGHT_RAYMARCH_STEPS 6
+#define CLOUDS_MAX_RAYMARCH_FSTEPS 6
+#define CLOUDS_LIGHT_RAYMARCH_STEPS 3
 #define CLOUDS_SECONDARY_LIGHT_RAYMARCH_STEPS 3
 
 //#define FULL_RES
+// #define ATMO_MIX_V1
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -57,12 +58,16 @@ layout(binding = 5) uniform sampler3D u_cloud_detail_texture;
 // Blue noise used for dithering
 layout(binding = 6) uniform sampler2D u_blue_noise_texture;
 
+layout(binding = 7) uniform sampler2D u_optical_depth_texture;
+
 // Parameters that don't change every frame
-layout (binding = 7) uniform Params {
+layout (binding = 8) uniform Params {
     mat4 world_to_model_matrix;
     
 	float planet_radius;
     float atmosphere_height;
+	float atmosphere_density;
+	float atmosphere_scattering_strength;
 
     float cloud_density_scale;// = 1.0;
 	float cloud_light_density_scale;
@@ -91,11 +96,14 @@ layout (binding = 7) uniform Params {
 	float point_light_radius;
 
 	float night_light_energy;
+
+	float reserved0;
 	float reserved1;
+	float reserved2;
 } u_params;
 
 // Camera
-layout (binding = 8) uniform CamParams {
+layout (binding = 9) uniform CamParams {
     mat4 inv_view_matrix;
     mat4 inv_projection_matrix;
 } u_cam_params;
@@ -111,7 +119,7 @@ layout(push_constant, std430) uniform PcParams {
     vec4 sun_center_viewspace; // 32..47 // w is not used
 
     vec2 cloud_coverage_rotation_x; // 48..55
-    float reserved1; // 56..59
+    float debug_value; // 56..59
     float reserved2; // 60..63
 } u_pc_params;
 
@@ -122,6 +130,8 @@ layout(push_constant, std430) uniform PcParams {
 const float PI = 3.14159265359;
 
 // x = first hit, y = second hit. Equal if not hit.
+// Either hits can be behind the ray's origin, as negative distance. For example if the sphere is behind, 
+// or if the ray's origin is inside it.
 vec2 ray_sphere(vec3 center, float radius, vec3 ray_origin, vec3 ray_dir) {
 	vec3 oc = ray_origin - center;
 	float b = dot( oc, ray_dir );
@@ -202,6 +212,139 @@ float length_sq_vec3(vec3 v) {
 
 float max_vec3_component(vec3 v) {
 	return max(v.x, max(v.y, v.z));
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Atmosphere
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+struct AtmosphereSettings {
+	float planet_radius;
+	float height;
+	float density;
+	vec3 ambient_color;
+	vec3 modulate;
+	vec3 scattering_wavelengths;
+	float scattering_strength;
+};
+
+#ifndef ATMOSPHERE_RAYMARCH_STEPS
+#define ATMOSPHERE_RAYMARCH_STEPS 8
+#endif
+
+float get_atmosphere_density(float height, AtmosphereSettings atmo) {
+	float sd = height - atmo.planet_radius;
+	float h = clamp(sd / atmo.height, 0.0, 1.0);
+	float y = 1.0 - h;
+
+	float density = y * y * y * atmo.density;
+
+	// Attenuates atmosphere in a radius around the camera
+//	float distance_from_ray_origin = 0.0;
+//	density *= min(1.0, (1.0 / u_attenuation_distance) * distance_from_ray_origin);
+
+	return density;
+}
+
+float get_baked_optical_depth(
+	vec3 pos,
+	vec3 dir,
+	vec3 planet_center,
+	sampler2D optical_depth_texture,
+	AtmosphereSettings atmo
+) {
+	float height = distance(pos, planet_center) - atmo.planet_radius;
+	float height_ratio = clamp(height / atmo.height, 0.0, 1.0);
+	vec3 up = normalize(pos - planet_center);
+	float uvx = 0.5 + 0.5 * dot(up, dir);
+
+	// TODO Account for samples taken below planet surface
+	// they can be added as a linear equation since density is constant
+
+	return pow2(texture(optical_depth_texture, vec2(uvx, height_ratio)).r);
+}
+
+struct AtmoResult {
+	float transmittance;
+	vec3 scattering;
+};
+
+#ifdef ATMO_MIX_V1
+struct AtmoIntegration {
+	float view_ray_optical_depth;
+};
+
+AtmoIntegration AtmoIntegration_init() {
+	return AtmoIntegration(0.0);
+}
+#endif
+
+AtmoResult compute_atmosphere(
+	vec3 ray_origin,
+	vec3 ray_dir,
+	vec3 planet_center,
+	float t_begin,
+	float t_end,
+	// float linear_depth,
+	vec3 sun_dir,
+	float jitter,
+	AtmosphereSettings atmo
+) {
+	// Rocky planets don't need many steps (8 can be enough).
+	// However gas giants need a lot more (64?) since rays traverse it fully.
+	const int steps = ATMOSPHERE_RAYMARCH_STEPS;
+
+	// TODO Compute this in script?
+	vec3 scattering_coefficients = vec3(
+		pow4(400.0 / atmo.scattering_wavelengths.x),
+		pow4(400.0 / atmo.scattering_wavelengths.y),
+		pow4(400.0 / atmo.scattering_wavelengths.z)
+	);
+	scattering_coefficients = mix(vec3(1.0), scattering_coefficients, atmo.scattering_strength);
+
+	float step_len = (t_end - t_begin) / float(steps);
+	vec3 total_light = vec3(0.0);
+	float view_ray_optical_depth = 0.0;
+	// float alpha = 0.0;
+	float total_transmittance = 1.0;
+	vec3 pos0 = ray_origin + ray_dir * t_begin;
+	vec3 pos = pos0;
+
+	for (int i = 0; i < steps; ++i) {
+		float sun_ray_optical_depth = get_baked_optical_depth(
+			pos, 
+			sun_dir, 
+			planet_center, 
+			u_optical_depth_texture, 
+			atmo
+		);
+
+		float height = distance(pos, planet_center);
+		float local_density = get_atmosphere_density(height, atmo);
+		view_ray_optical_depth += local_density * step_len;
+
+		vec3 transmittance = exp(
+			-(sun_ray_optical_depth + view_ray_optical_depth)
+			* scattering_coefficients);
+
+		total_light += local_density * step_len * transmittance * scattering_coefficients;
+
+		float vtransmittance = exp(-local_density * step_len);
+		total_transmittance *= vtransmittance;
+
+		pos += ray_dir * step_len;
+	}
+
+	total_light = clamp(total_light + atmo.ambient_color, vec3(0.0), vec3(1.0));
+
+	// Get rid of color banding.
+	// Make sure it doesn't go out of bounds.
+	// Also for some reason clamping to 1.0 caused HDR sunsets to be noisy
+	total_transmittance = clamp(total_transmittance + jitter * 0.02, 0.0, 0.99);
+
+	total_light *= atmo.modulate;
+
+	return AtmoResult(total_transmittance, total_light);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -388,10 +531,20 @@ float calculate_point_light_energy_factor(vec3 pos, vec4 point_light) {
 struct CloudResult {
 	vec3 scattering;
 	vec3 transmittance;
+#ifdef ATMO_MIX_V1
+	vec3 cloud_only_transmittance;
+#endif
+	float depth;
 };
 
+const float CloudResult_MAX_DEPTH = 999999.0;
+
 CloudResult default_cloud_result() {
-	return CloudResult(vec3(0.0), vec3(1.0));
+#ifdef ATMO_MIX_V1
+	return CloudResult(vec3(0.0), vec3(1.0), vec3(1.0), CloudResult_MAX_DEPTH);
+#else
+	return CloudResult(vec3(0.0), vec3(1.0), CloudResult_MAX_DEPTH);
+#endif
 }
 
 CloudResult raymarch_cloud(
@@ -406,6 +559,10 @@ CloudResult raymarch_cloud(
 	CloudSettings settings,
 	vec4 point_light,
 	float night_light_energy
+#ifdef ATMO_MIX_V1
+	,AtmosphereSettings atmo,
+	inout AtmoIntegration atmo_integ
+#endif
 ) {
 	vec3 sun_color = vec3(1.0);
 	const float cloud_light_multiplier = 50.0;
@@ -416,20 +573,25 @@ CloudResult raymarch_cloud(
 	const float ray_dist = t_end - t_begin;
 	// const float step_dropoff = linearstep(1.0, 0.0, pow4(dot(vec3(0.0, 1.0, 0.0), ray_dir)));
 
-	const float lq_step_len = ray_dist / float(CLOUDS_MAX_RAYMARCH_STEPS);
-	const float hq_step_len = lq_step_len / float(CLOUDS_MAX_RAYMARCH_FSTEPS);
+	float lq_step_len = ray_dist / float(CLOUDS_MAX_RAYMARCH_STEPS);
+	float hq_step_len = lq_step_len / float(CLOUDS_MAX_RAYMARCH_FSTEPS);
 	const float max_steps = CLOUDS_MAX_RAYMARCH_STEPS * CLOUDS_MAX_RAYMARCH_FSTEPS;
+	float step_len = hq_step_len;
 
-	const float offset = lq_step_len * jitter;
+	// const float offset = lq_step_len * jitter;
 	float dist_travelled = t_begin;
+	// dist_travelled += lq_step_len * jitter;
+	dist_travelled += hq_step_len * jitter;
 
-	int hq_marcher_countdown = 0;
+	// int hq_marcher_countdown = 0;
 
 	// TODO Not used?
 	// float previous_step_len = 0.0;
 
 	CloudResult result = default_cloud_result();
 	const float break_transmittance = 0.01;
+
+	// float current_step_len = lq_step_len;
 
 	for (float i = 0.0; i < max_steps; ++i) {
 		// TODO Is this really needed? We already do max steps which is the sum of all potential hq steps
@@ -439,25 +601,34 @@ CloudResult raymarch_cloud(
 
 		vec3 pos = ray_origin + dist_travelled * ray_dir;
 		Coverage sd1 = sample_sdf_low(pos, settings);
+		// float extinction0 = sample_density(sd1, pos, cam_pos, time, settings);
 
-		float current_step_len = lq_step_len;//sd1;
+// 		if (hq_marcher_countdown <= 0) {
+// 			if (extinction0 > 0.0) {
+// 			// if (true) {
+// 				// Hit some clouds, step back
+// 				hq_marcher_countdown = CLOUDS_MAX_RAYMARCH_FSTEPS;
+// 				// dist_travelled -= lq_step_len;
+// 				dist_travelled += hq_step_len * jitter;
 
-		if (hq_marcher_countdown <= 0) {
-			if (sd1.combined < hq_step_len) {
-				// Hit some clouds, step back
-				hq_marcher_countdown = CLOUDS_MAX_RAYMARCH_FSTEPS;
-				dist_travelled += hq_step_len * jitter;
-			} else {
-				dist_travelled += current_step_len;
-				continue;
-			}
-		}
+// 			} else {
+// 				dist_travelled += lq_step_len;
 
-		if (hq_marcher_countdown > 0) {
-			--hq_marcher_countdown;
+// #ifdef ATMO_MIX_V1
+// 				AtmoResult ar = integrate_atmosphere(pos, sun_dir, vec3(0.0), lq_step_len, atmo_integ, atmo);
+// 				result.scattering += result.cloud_only_transmittance * ar.scattering;
+// 				result.transmittance *= ar.transmittance;
+// #endif
+// 				continue;
+// 			}
+// 		}
+
+		// if (hq_marcher_countdown > 0) {
+		if (true) {
+			// --hq_marcher_countdown;
 
 			if (sd1.combined < 0.0) {
-				hq_marcher_countdown = CLOUDS_MAX_RAYMARCH_FSTEPS;
+				// hq_marcher_countdown = CLOUDS_MAX_RAYMARCH_FSTEPS;
 
 				float extinction = sample_density(sd1, pos, cam_pos, time, settings);
 
@@ -513,20 +684,40 @@ CloudResult raymarch_cloud(
 					}
 
 					vec3 luminance = ambient + sun_light * light_energy;
-					vec3 transmittance = exp(-extinction * hq_step_len * EXTINCTION_MULT);
+					vec3 transmittance = exp(-extinction * step_len * EXTINCTION_MULT);
 					vec3 integ_scatt = luminance * (1.0 - transmittance);
 
 					result.scattering += result.transmittance * integ_scatt;
 					result.transmittance *= transmittance;
+#ifdef ATMO_MIX_V1
+					result.cloud_only_transmittance *= transmittance;
+#endif
 
 					if (max_vec3_component(result.transmittance) <= break_transmittance) {
 						result.transmittance = vec3(0.0);
+#ifdef ATMO_MIX_V1
+						result.cloud_only_transmittance = vec3(0.0);
+#endif
 						break;
 					}
+
+					if (extinction > 0.1) {
+						// TODO Use dist_travelled?
+						result.depth = min(result.depth, distance(ray_origin, pos));
+					}
+
+				} else {
+					step_len = hq_step_len;
 				}
 			}
 
-			dist_travelled += hq_step_len;
+#ifdef ATMO_MIX_V1
+			AtmoResult ar = integrate_atmosphere(pos, sun_dir, vec3(0.0), step_len, atmo_integ, atmo);
+			result.scattering += result.cloud_only_transmittance * ar.scattering;
+			result.transmittance *= ar.transmittance;
+#endif
+
+			dist_travelled += step_len;
 		}
 
 		// previous_step_len = current_step_len;
@@ -537,6 +728,14 @@ CloudResult raymarch_cloud(
 	result.transmittance = clamp(result.transmittance, vec3(0.0), vec3(1.0));
 	return result;
 }
+
+vec3 color_curve(vec3 v) {
+	v = clamp(v, vec3(0.0), vec3(2.0));
+	vec3 a = 0.5 * v - vec3(1.0);
+	vec3 r = vec3(1.0) - a * a;
+	return clamp(r, vec3(0.0), vec3(1.0));
+}
+
 
 CloudResult render_clouds(
 	vec3 planet_center_viewspace,
@@ -551,10 +750,16 @@ CloudResult render_clouds(
     CloudSettings cloud_settings,
 	vec4 point_light,
 	float night_light_energy
+#ifdef ATMO_MIX_V1
+	,AtmosphereSettings atmo
+#endif
 ) {
 	vec2 rs_clouds_top = ray_sphere(planet_center_viewspace, cloud_settings.top_height, ray_origin, ray_dir);
 
-	CloudResult result = CloudResult(vec3(0.0), vec3(1.0));
+	CloudResult result = default_cloud_result();
+#ifdef ATMO_MIX_V1
+	AtmoIntegration atmo_integ = AtmoIntegration_init();
+#endif
 
 	if (rs_clouds_top.x != rs_clouds_top.y) {
 		vec2 rs_clouds_bottom = ray_sphere(planet_center_viewspace, cloud_settings.bottom_height, ray_origin, ray_dir);
@@ -567,20 +772,35 @@ CloudResult render_clouds(
 			// Don't compute clouds when opaque stuff occludes them,
 			// when under the clouds layer.
 			// This saves 0.5ms in ground views on a 1060
-			&& (linear_depth > rs_clouds_bottom.y || rs_clouds_bottom.x > 0.0)
+			// && (linear_depth > rs_clouds_bottom.y || rs_clouds_bottom.x > 0.0)
 		) {
 			mat4 view_to_model_matrix = world_to_model_matrix * inv_view_matrix;
 			vec3 cam_pos_model = (view_to_model_matrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+			vec3 sun_dir_model = (view_to_model_matrix * vec4(sun_dir_viewspace, 0.0)).xyz;
+			vec3 ray_origin_model = (view_to_model_matrix * vec4(ray_origin, 1.0)).xyz;
+			vec3 ray_dir_model = (view_to_model_matrix * vec4(ray_dir, 0.0)).xyz;
 
 			// When under the cloud layer, this improves quality significantly,
 			// unfortunately entering the cloud layer causes a jarring transition
 			if (length_sq_vec3(cam_pos_model) < pow2(cloud_settings.bottom_height)) {
 				cloud_rs.x = rs_clouds_bottom.y;
-			}
 
-			vec3 ray_origin_model = (view_to_model_matrix * vec4(ray_origin, 1.0)).xyz;
-			vec3 ray_dir_model = (view_to_model_matrix * vec4(ray_dir, 0.0)).xyz;
-			vec3 sun_dir_model = (view_to_model_matrix * vec4(sun_dir_viewspace, 0.0)).xyz;
+#ifdef ATMO_MIX_V1
+				AtmoResult ar = compute_atmosphere2(
+					ray_origin_model,
+					ray_dir_model,
+					vec3(0.0),
+					max(rs_clouds_bottom.x, 0.0),
+					min(rs_clouds_bottom.y, linear_depth),
+					sun_dir_model,
+					jitter,
+					atmo,
+					atmo_integ
+				);
+				result.scattering += ar.scattering;
+				result.transmittance *= ar.transmittance;
+#endif
+			}
 
 			CloudResult rr = raymarch_cloud(
 				ray_origin_model, 
@@ -594,11 +814,24 @@ CloudResult render_clouds(
                 cloud_settings,
 				point_light,
 				night_light_energy
+#ifdef ATMO_MIX_V1
+				,atmo,
+				atmo_integ
+#endif
             );
+
+			// rr.scattering = color_curve(rr.scattering);
 
 			// const float exposure = 1.0;
 			// inout_color.rgb = inout_color.rgb * rr.transmittance + rr.scattering * exposure;
+			// result = rr;
+
+#ifdef ATMO_MIX_V1
+			result.scattering += result.transmittance * rr.scattering;
+			result.transmittance *= rr.transmittance;
+#else
 			result = rr;
+#endif
 		}
 	}
 
@@ -643,7 +876,8 @@ void main() {
 	vec3 ray_dir = normalize(view_coords.xyz - ray_origin);
 
 	float atmosphere_radius = u_params.planet_radius + u_params.atmosphere_height;
-	vec2 rs_atmo = ray_sphere(u_pc_params.planet_center_viewspace.xyz, atmosphere_radius, ray_origin, ray_dir);
+	vec3 planet_center_viewspace = u_pc_params.planet_center_viewspace.xyz;
+	vec2 rs_atmo = ray_sphere(planet_center_viewspace, atmosphere_radius, ray_origin, ray_dir);
 
 	// TODO if we run this shader in a double-clip scenario,
 	// we have to account for the near and far clips properly, so they can be composed seamlessly
@@ -655,7 +889,7 @@ void main() {
 		float t_end = max(rs_atmo.y, 0.0);
 
 		vec2 rs_ground = ray_sphere(
-            u_pc_params.planet_center_viewspace.xyz, 
+            planet_center_viewspace, 
             u_params.planet_radius, 
             ray_origin, 
             ray_dir
@@ -669,17 +903,15 @@ void main() {
 
 		t_end = min(t_end, linear_depth);
 
-		vec3 sun_dir_viewspace = normalize(
-            u_pc_params.sun_center_viewspace.xyz - u_pc_params.planet_center_viewspace.xyz
-        );
+		vec3 sun_dir_viewspace = normalize(u_pc_params.sun_center_viewspace.xyz - planet_center_viewspace);
 
 		float time = u_pc_params.time;
 		float frame = u_pc_params.frame;
 
 		// Blue noise doesn't have low-frequency patterns, it looks less "noisy"
 		// http://momentsingraphics.de/BlueNoise.html
-		ivec2 blue_noise_uv = (fragcoord + ivec2(time * 100.0)) & ivec2(0xff);
-		// ivec2 blue_noise_uv = fragcoord & ivec2(0xff);
+		// ivec2 blue_noise_uv = (fragcoord + ivec2(time * 100.0)) & ivec2(0xff);
+		ivec2 blue_noise_uv = fragcoord & ivec2(0xff);
 		float jitter = texelFetch(u_blue_noise_texture, blue_noise_uv, 0).r;
 
 		// Animating Noise For Integration Over Time
@@ -687,12 +919,15 @@ void main() {
 		// const float golden_ratio = 1.61803398875;
 		// jitter = fract(jitter + float(int(frame) % 32) * golden_ratio);
 
-		// vec4 atmosphere = compute_atmosphere_v2(ray_origin, ray_dir, in_v_planet_center_viewspace,
-		// 	t_begin, t_end, linear_depth, sun_dir, jitter);
-
-		// out_albedo = atmosphere.rgb;
-		// out_alpha = atmosphere.a;
-
+		AtmosphereSettings atmo;
+		atmo.planet_radius =           u_params.planet_radius;
+		atmo.height =                  u_params.atmosphere_height;
+		atmo.density =                 u_params.atmosphere_density;
+		atmo.ambient_color =           vec3(0.01);
+		atmo.modulate =                vec3(1.0);
+		atmo.scattering_wavelengths =  vec3(700.0, 530.0, 440.0);
+		atmo.scattering_strength =     u_params.atmosphere_scattering_strength;
+	
 		vec2 cloud_coverage_rotation_x = u_pc_params.cloud_coverage_rotation_x;
 		mat2 cloud_coverage_rotation = mat2(cloud_coverage_rotation_x, vec2_rotate_90(cloud_coverage_rotation_x));
 
@@ -717,7 +952,7 @@ void main() {
         cs.detail_falloff_distance =  u_params.cloud_detail_falloff_distance;
 
         cr = render_clouds(
-            u_pc_params.planet_center_viewspace.xyz,
+            planet_center_viewspace,
             ray_origin,
             ray_dir,
             linear_depth,
@@ -734,9 +969,53 @@ void main() {
 				u_params.point_light_radius
 			),
 			u_params.night_light_energy
+#ifdef ATMO_MIX_V1
+			,atmo
+#endif
         );
 
+		// AtmoIntegration atmo_integ = AtmoIntegration_init();
+		AtmoResult atmo_result = compute_atmosphere(
+			ray_origin, 
+			ray_dir, 
+			planet_center_viewspace,
+			t_begin, 
+			t_end, 
+			// linear_depth, 
+			sun_dir_viewspace, 
+			jitter,
+			atmo
+			// atmo_integ
+		);
+
+		vec3 c_transmittance = cr.transmittance;
+		cr.scattering += cr.transmittance * atmo_result.scattering;
+		cr.transmittance *= atmo_result.transmittance;
+
+		if (cr.depth < CloudResult_MAX_DEPTH) {
+			AtmoResult atmo_result2 = compute_atmosphere(
+				ray_origin, 
+				ray_dir, 
+				planet_center_viewspace,
+				t_begin, 
+				cr.depth, 
+				sun_dir_viewspace, 
+				jitter,
+				atmo
+			);
+
+			cr.scattering = mix(atmo_result2.scattering, cr.scattering, 
+				mix(atmo_result2.transmittance, 1.0, c_transmittance.r));
+
+			// float fmin = 10.0;
+			// float fmax = 40.0;
+			// float f = clamp((cr.depth - t_begin - fmin) / (fmax - fmin), 0.0, 1.0);
+			// cr.transmittance = mix(cr.transmittance, vec3(atmo_result.transmittance), f);
+			// cr.scattering = mix(cr.scattering, atmo_result.scattering, f);
+		}
 	}
+
+	// cr.scattering = mix(cr.scattering, color_curve(cr.scattering), clamp(u_pc_params.debug_value, 0.0, 1.0));
 
 #ifdef FULL_RES
     vec4 color = imageLoad(u_color_image, fragcoord);
@@ -745,8 +1024,15 @@ void main() {
     imageStore(u_color_image, fragcoord, color);
 
 #else
-	imageStore(u_output_image0, fragcoord, vec4(cr.transmittance, sqrt(cr.scattering.r)));
-	imageStore(u_output_image1, fragcoord, vec4(sqrt(cr.scattering.gb), 0.0, 0.0));
+	// imageStore(u_output_image0, fragcoord, vec4(cr.transmittance, sqrt(cr.scattering.r)));
+	// imageStore(u_output_image1, fragcoord, vec4(sqrt(cr.scattering.gb), 0.0, 0.0));
+	imageStore(u_output_image0, fragcoord, vec4(cr.transmittance, cr.scattering.r));
+	imageStore(u_output_image1, fragcoord, vec4(cr.scattering.gb, 0.0, 0.0));
 
 #endif
+
+	// DEBUG
+	// float od = texture(u_optical_depth_texture, screen_uv).r;
+	// imageStore(u_output_image0, fragcoord, vec4(vec3(0.1), od)); 
+	// imageStore(u_output_image1, fragcoord, vec4(0.0, 0.0, 0.0, 0.0)); 
 }
