@@ -28,12 +28,6 @@
 // SOFTWARE.
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-// #define CLOUDS_RAYMARCHED_LIGHTING
-#define CLOUDS_MAX_RAYMARCH_STEPS 24
-#define CLOUDS_MAX_RAYMARCH_FSTEPS 4
-#define CLOUDS_LIGHT_RAYMARCH_STEPS 6
-#define CLOUDS_SECONDARY_LIGHT_RAYMARCH_STEPS 3
-
 //#define FULL_RES
 // #define ATMO_MIX_V1
 
@@ -100,6 +94,16 @@ layout (binding = 8) uniform Params {
 	float cloud_scattering_r;
 	float cloud_scattering_g;
 	float cloud_scattering_b;
+
+	float cloud_rough_steps;
+	float cloud_sub_steps;
+	float cloud_main_light_steps;
+	float cloud_secondary_light_steps;
+
+	float atmo_steps;
+	float reserved0;
+	float reserved1;
+	float reserved2;
 } u_params;
 
 // Camera
@@ -219,6 +223,7 @@ float max_vec3_component(vec3 v) {
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 struct AtmosphereSettings {
+	int steps;
 	float planet_radius;
 	float height;
 	float density;
@@ -227,10 +232,6 @@ struct AtmosphereSettings {
 	vec3 scattering_wavelengths;
 	float scattering_strength;
 };
-
-#ifndef ATMOSPHERE_RAYMARCH_STEPS
-#define ATMOSPHERE_RAYMARCH_STEPS 8
-#endif
 
 float get_atmosphere_density(float height, AtmosphereSettings atmo) {
 	float sd = height - atmo.planet_radius;
@@ -292,7 +293,7 @@ AtmoResult compute_atmosphere(
 ) {
 	// Rocky planets don't need many steps (8 can be enough).
 	// However gas giants need a lot more (64?) since rays traverse it fully.
-	const int steps = ATMOSPHERE_RAYMARCH_STEPS;
+	const int steps = atmo.steps;
 
 	// TODO Compute this in script?
 	vec3 scattering_coefficients = vec3(
@@ -354,6 +355,11 @@ AtmoResult compute_atmosphere(
 // Settings carried around in cloud functions.
 // We don't use uniforms directly to make the code a bit more portable.
 struct CloudSettings {
+	int rough_steps;
+	int sub_steps;
+	int main_light_steps;
+	int secondary_light_steps;
+
 	float ground_height;
 	float bottom_height;
 	float top_height;
@@ -573,9 +579,12 @@ CloudResult raymarch_cloud(
 	const float ray_dist = t_end - t_begin;
 	// const float step_dropoff = linearstep(1.0, 0.0, pow4(dot(vec3(0.0, 1.0, 0.0), ray_dir)));
 
-	float lq_step_len = ray_dist / float(CLOUDS_MAX_RAYMARCH_STEPS);
-	float hq_step_len = lq_step_len / float(CLOUDS_MAX_RAYMARCH_FSTEPS);
-	const float max_steps = CLOUDS_MAX_RAYMARCH_STEPS * CLOUDS_MAX_RAYMARCH_FSTEPS;
+	const int rough_steps = settings.rough_steps;
+	const int sub_steps = settings.sub_steps;
+
+	float lq_step_len = ray_dist / float(rough_steps);
+	float hq_step_len = lq_step_len / float(sub_steps);
+	const float max_steps = rough_steps * sub_steps;
 	float step_len = hq_step_len;
 
 	// const float offset = lq_step_len * jitter;
@@ -647,7 +656,7 @@ CloudResult raymarch_cloud(
 							time, 
 							jitter, 
 							settings, 
-							CLOUDS_LIGHT_RAYMARCH_STEPS
+							settings.main_light_steps
 						);
 					}
 
@@ -664,7 +673,7 @@ CloudResult raymarch_cloud(
 							time, 
 							jitter, 
 							settings, 
-							CLOUDS_SECONDARY_LIGHT_RAYMARCH_STEPS
+							settings.secondary_light_steps
 						);
 					}
 
@@ -679,7 +688,7 @@ CloudResult raymarch_cloud(
 							time, 
 							jitter, 
 							settings,
-							CLOUDS_SECONDARY_LIGHT_RAYMARCH_STEPS
+							settings.secondary_light_steps
 						);
 					}
 
@@ -920,6 +929,7 @@ void main() {
 		// jitter = fract(jitter + float(int(frame) % 32) * golden_ratio);
 
 		AtmosphereSettings atmo;
+		atmo.steps =                   int(u_params.atmo_steps);
 		atmo.planet_radius =           u_params.planet_radius;
 		atmo.height =                  u_params.atmosphere_height;
 		atmo.density =                 u_params.atmosphere_density;
@@ -932,6 +942,10 @@ void main() {
 		mat2 cloud_coverage_rotation = mat2(cloud_coverage_rotation_x, vec2_rotate_90(cloud_coverage_rotation_x));
 
         CloudSettings cs;
+		cs.rough_steps =              int(u_params.cloud_rough_steps);
+		cs.sub_steps =                int(u_params.cloud_sub_steps);
+		cs.main_light_steps =         int(u_params.cloud_main_light_steps);
+		cs.secondary_light_steps =    int(u_params.cloud_secondary_light_steps);
         cs.bottom_height =            u_params.planet_radius + u_params.cloud_bottom * u_params.atmosphere_height;
         cs.top_height =               u_params.planet_radius + u_params.cloud_top * u_params.atmosphere_height;
         cs.density_scale =            u_params.cloud_density_scale;

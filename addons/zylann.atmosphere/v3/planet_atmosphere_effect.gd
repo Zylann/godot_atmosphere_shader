@@ -10,6 +10,7 @@ extends CompositorEffect
 @export var planet_radius := 100.0
 @export var atmosphere_height := 20.0
 @export var atmosphere_density := 0.2
+@export var atmosphere_steps := 16
 @export_range(0.0, 1.0, 0.01) var atmosphere_scattering_strength := 1.0
 
 @export_group("Light sources")
@@ -45,6 +46,12 @@ extends CompositorEffect
 @export var clouds_detail_scale := 0.05
 @export_range(0.0, 1.0) var clouds_detail_amount := 0.5
 @export var clouds_detail_falloff_distance := 100.0
+
+@export_group("Clouds precision", "clouds")
+@export_range(8, 64) var clouds_rough_steps := 24
+@export_range(1, 8) var clouds_sub_steps := 4
+@export_range(1, 8) var clouds_main_light_steps := 6
+@export_range(1, 8) var clouds_secondary_light_steps := 3
 
 @export_group("Debug")
 @export var debug_value := 0.0;
@@ -684,6 +691,16 @@ func _make_params_f32() -> PackedFloat32Array:
 	params_f32.append(clouds_scattering_coefficients.x)
 	params_f32.append(clouds_scattering_coefficients.y)
 	params_f32.append(clouds_scattering_coefficients.z)
+
+	params_f32.append(clouds_rough_steps)
+	params_f32.append(clouds_sub_steps)
+	params_f32.append(clouds_main_light_steps)
+	params_f32.append(clouds_secondary_light_steps)
+
+	params_f32.append(atmosphere_steps)
+	params_f32.append(0.0)
+	params_f32.append(0.0)
+	params_f32.append(0.0)
 
 	#assert(params_f32.size() % 16 == 0)
 	
