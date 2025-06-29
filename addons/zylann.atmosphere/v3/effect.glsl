@@ -103,6 +103,11 @@ layout (binding = 8) uniform Params {
 	float reserved0;
 	float reserved1;
 	float reserved2;
+
+	float cloud_sunset_offset_r;
+	float cloud_sunset_offset_g;
+	float cloud_sunset_offset_b;
+	float cloud_sunset_sharpness;
 } u_params;
 
 // Camera
@@ -215,6 +220,10 @@ float length_sq_vec3(vec3 v) {
 
 float max_vec3_component(vec3 v) {
 	return max(v.x, max(v.y, v.z));
+}
+
+float min_vec3_component(vec3 v) {
+	return min(v.x, min(v.y, v.z));
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -373,12 +382,26 @@ struct CloudSettings {
 	float detail_falloff_distance;
 
 	vec3 scattering_coefficients;
+
+	vec3 sunset_offsets;
+	float sunset_sharpness;
 };
 
-float get_planet_shadow(vec3 pos, float planet_radius, vec3 sun_dir) {
-	float dp = clamp(dot(normalize(pos), sun_dir) * 4.0 + 0.5, 0.0, 1.0);
-	return dp * dp;
-	// return 1.0;
+vec3 planet_shadow_curve_vec3(vec3 v) {
+	return smoothstep(vec3(0.0), vec3(1.0), v);
+}
+
+// For each color component, returns an approximation of how much sun light they should get, around the terminator
+vec3 get_planet_shadow(vec3 pos, vec3 sun_dir, CloudSettings settings) {
+	// Offset based on height, so as we progress towards the dark side,
+	// higher clouds get light for longer than lower ones
+	float height_ratio = (length(pos) - settings.bottom_height) / (settings.top_height - settings.bottom_height);
+	float offset_towards_dark_side = height_ratio;
+
+	float ss = settings.sunset_sharpness;
+	float dp = dot(normalize(pos), sun_dir) * ss;
+	vec3 sv = clamp(vec3(dp) + settings.sunset_offsets + offset_towards_dark_side, vec3(0.0), vec3(1.0));
+	return planet_shadow_curve_vec3(sv);
 }
 
 float henyey_greenstein(float g, float mu) {
@@ -595,10 +618,12 @@ CloudResult raymarch_cloud(
 			if (extinction > 0.01) {
 				vec3 light_energy = vec3(0.0);
 
-				float planet_shadow = get_planet_shadow(pos, settings.ground_height, sun_dir);
+				vec3 planet_shadow = get_planet_shadow(pos, sun_dir, settings);
+				float planet_shadow_max = max_vec3_component(planet_shadow);
+				float planet_shadow_min = min_vec3_component(planet_shadow);
 
 				// Sun light
-				if (planet_shadow > 0.0) {
+				if (planet_shadow_min > 0.0) {
 					light_energy += planet_shadow * raymarch_light_energy(
 						pos, 
 						sun_dir, 
@@ -630,8 +655,8 @@ CloudResult raymarch_cloud(
 
 				// Night light
 				// TODO Option to use cheap height light?
-				if (planet_shadow < 1.0) {
-					light_energy += night_light_energy * raymarch_light_energy(
+				if (planet_shadow_max < 1.0) {
+					light_energy += (vec3(1.0) - planet_shadow) * night_light_energy * raymarch_light_energy(
 						pos, 
 						normalize(pos), 
 						cam_pos, 
@@ -861,11 +886,18 @@ void main() {
         cs.detail_scale =             u_params.cloud_detail_scale;
         cs.detail_amount =            u_params.cloud_detail_amount;
         cs.detail_falloff_distance =  u_params.cloud_detail_falloff_distance;
+
 		cs.scattering_coefficients =  vec3(
 			u_params.cloud_scattering_r,
 			u_params.cloud_scattering_g,
 			u_params.cloud_scattering_b
 		);
+		cs.sunset_offsets = vec3(
+			u_params.cloud_sunset_offset_r,
+			u_params.cloud_sunset_offset_g,
+			u_params.cloud_sunset_offset_b
+		);
+		cs.sunset_sharpness =         u_params.cloud_sunset_sharpness;
 
         cr = render_clouds(
             planet_center_viewspace,
