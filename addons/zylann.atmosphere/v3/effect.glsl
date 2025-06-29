@@ -399,8 +399,8 @@ vec3 get_planet_shadow(vec3 pos, vec3 sun_dir, CloudSettings settings) {
 	float offset_towards_dark_side = height_ratio;
 
 	float ss = settings.sunset_sharpness;
-	float dp = dot(normalize(pos), sun_dir) * ss;
-	vec3 sv = clamp(vec3(dp) + settings.sunset_offsets + offset_towards_dark_side, vec3(0.0), vec3(1.0));
+	float dp = dot(normalize(pos), sun_dir);
+	vec3 sv = vec3(dp * ss) + settings.sunset_offsets + vec3(offset_towards_dark_side);
 	return planet_shadow_curve_vec3(sv);
 }
 
@@ -620,10 +620,10 @@ CloudResult raymarch_cloud(
 
 				vec3 planet_shadow = get_planet_shadow(pos, sun_dir, settings);
 				float planet_shadow_max = max_vec3_component(planet_shadow);
-				float planet_shadow_min = min_vec3_component(planet_shadow);
+				// float planet_shadow_min = min_vec3_component(planet_shadow);
 
 				// Sun light
-				if (planet_shadow_min > 0.0) {
+				if (planet_shadow_max > 0.0) {
 					light_energy += planet_shadow * raymarch_light_energy(
 						pos, 
 						sun_dir, 
