@@ -26,6 +26,7 @@ extends CompositorEffect
 @export var clouds_light_density_scale := 1.0
 @export_range(0.0, 2.0, 0.01) var clouds_light_reach := 1.0
 @export var clouds_scattering_coefficients := Vector3(0.8, 0.8, 1.0)
+@export_range(0.0, 1.0, 0.01) var clouds_gamma_correction := 0.0
 @export var clouds_sunset_offset := Vector3(0.2, 0.1, 1.0)
 @export_range(1.0, 10.0, 0.01) var clouds_sunset_sharpness := 4.0
 
@@ -700,6 +701,7 @@ func _make_params_f32() -> PackedFloat32Array:
 	params_f32.append(clouds_secondary_light_steps)
 
 	params_f32.append(atmosphere_steps)
+	params_f32.append(clouds_gamma_correction)
 	params_f32.append(0.0)
 	params_f32.append(0.0)
 
@@ -707,7 +709,6 @@ func _make_params_f32() -> PackedFloat32Array:
 	params_f32.append(clouds_sunset_offset.y)
 	params_f32.append(clouds_sunset_offset.z)
 	params_f32.append(clouds_sunset_sharpness)
-	params_f32.append(0.0)
 
 	#assert(params_f32.size() % 16 == 0)
 	

@@ -100,7 +100,7 @@ layout (binding = 8) uniform Params {
 	float cloud_secondary_light_steps;
 
 	float atmo_steps;
-	float reserved0;
+	float cloud_gamma_correction;
 	float reserved1;
 	float reserved2;
 
@@ -932,6 +932,8 @@ void main() {
 			atmo
 			// atmo_integ
 		);
+
+		cr.scattering = mix(cr.scattering, color_curve(cr.scattering), u_params.cloud_gamma_correction);
 
 		vec3 c_transmittance = cr.transmittance;
 		cr.scattering += cr.transmittance * atmo_result.scattering;
