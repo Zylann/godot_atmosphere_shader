@@ -2,9 +2,6 @@
 class_name PlanetAtmosphereEffect
 extends CompositorEffect
 
-# Refs:
-# https://www.youtube.com/watch?v=hqhWR0CxZHA
-
 @export_group("Atmosphere")
 @export var model_transform := Transform3D()
 @export var planet_radius := 100.0
