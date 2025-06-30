@@ -571,6 +571,39 @@ CloudResult raymarch_cloud(
 	vec4 point_light,
 	float night_light_energy
 ) {
+
+	// {
+	// 	// This is a hack limiting marching distance to increase horizon quality at certain heights.
+	// 	// Without it, horizon peers too much through the cloud layer when seen from space.
+	// 	// So we cut off how far we march, and gradually increase it as we descend through the clouds.
+	// 	// So the worst case scenario is now while being inside the clouds, which is better than having
+	// 	// that discrepancy all the time
+	// 	float march_distance_space =
+	// 		0.5 * sqrt(
+	// 			1.0 - pow2(settings.ground_height / settings.top_height)
+	// 		) * settings.bottom_height;
+	// 	float march_distance_ground = 3.0 * march_distance_space;
+	// 	float march_distance_transition_height_min = settings.bottom_height;
+	// 	float march_distance_transition_height_max = settings.top_height * 1.05;
+
+	// 	float max_d = mix(
+	// 		march_distance_ground,
+	// 		march_distance_space,
+	// 		smoothstep(
+	// 			march_distance_transition_height_min,
+	// 			march_distance_transition_height_max,
+	// 			length(ray_origin)
+	// 		)
+	// 	);
+
+	// 	t_end = t_begin + min(t_end - t_begin, max_d);
+	// }
+
+	{
+		float max_d = 25.0;
+		t_end = t_begin + min(t_end - t_begin, max_d);
+	}
+
 	vec3 sun_color = vec3(1.0);
 	const float cloud_light_multiplier = 50.0;
 	vec3 sun_light = sun_color * cloud_light_multiplier;
