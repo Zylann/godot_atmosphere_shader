@@ -7,7 +7,7 @@ extends CompositorEffect
 @export var planet_radius := 100.0
 @export var atmosphere_height := 20.0
 @export var atmosphere_density := 0.2
-@export var atmosphere_steps := 16
+@export_range(1, 64) var atmosphere_steps := 16
 @export_range(0.0, 1.0, 0.01) var atmosphere_scattering_strength := 1.0
 
 @export_group("Light sources")
