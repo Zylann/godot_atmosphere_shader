@@ -995,8 +995,6 @@ void main() {
 		}
 	}
 
-	// cr.scattering = mix(cr.scattering, color_curve(cr.scattering), clamp(u_pc_params.debug_value, 0.0, 1.0));
-
 #ifdef FULL_RES
     vec4 color = imageLoad(u_color_image, fragcoord);
 	const float exposure = 1.0;
