@@ -29,6 +29,8 @@
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 //#define FULL_RES
+#define ENABLE_CLOUDS
+// #define ENABLE_ATMO
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -37,24 +39,26 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(rgba16f, set = 0, binding = 0) uniform image2D u_input_image;
 #else
 layout(rgba8, set = 0, binding = 0) uniform image2D u_output_image0;
-layout(rg8, set = 0, binding = 1) uniform image2D u_output_image1;
+layout(rgba8, set = 0, binding = 1) uniform image2D u_output_image1;
+layout(rgba8, set = 0, binding = 2) uniform image2D u_output_image2;
+layout(r32f, set = 0, binding = 3) uniform image2D u_output_image3;
 #endif
 
 // Depth of the rendered scene so far
-layout(binding = 2) uniform sampler2D u_depth_texture;
+layout(binding = 4) uniform sampler2D u_depth_texture;
 
 // Grayscale cubemap weighting overall cloud density
-layout(binding = 3) uniform samplerCube u_cloud_coverage_cubemap;
+layout(binding = 5) uniform samplerCube u_cloud_coverage_cubemap;
 // Precomputed noise used to shape the clouds, tiling seamlessly
-layout(binding = 4) uniform sampler3D u_cloud_shape_texture;
-layout(binding = 5) uniform sampler3D u_cloud_detail_texture;
+layout(binding = 6) uniform sampler3D u_cloud_shape_texture;
+layout(binding = 7) uniform sampler3D u_cloud_detail_texture;
 // Blue noise used for dithering
-layout(binding = 6) uniform sampler2D u_blue_noise_texture;
+layout(binding = 8) uniform sampler2D u_blue_noise_texture;
 
-layout(binding = 7) uniform sampler2D u_optical_depth_texture;
+layout(binding = 9) uniform sampler2D u_optical_depth_texture;
 
 // Parameters that don't change every frame
-layout (binding = 8) uniform Params {
+layout (binding = 10) uniform Params {
     mat4 world_to_model_matrix;
     
 	float planet_radius;
@@ -111,7 +115,7 @@ layout (binding = 8) uniform Params {
 } u_params;
 
 // Camera
-layout (binding = 9) uniform CamParams {
+layout (binding = 11) uniform CamParams {
     mat4 inv_view_matrix;
     mat4 inv_projection_matrix;
 } u_cam_params;
@@ -129,6 +133,10 @@ layout(push_constant, std430) uniform PcParams {
     vec2 cloud_coverage_rotation_x; // 48..55
     float debug_value; // 56..59
     float reserved2; // 60..63
+
+	vec2 screen_size;
+    float reserved3;
+    float reserved4;
 } u_pc_params;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -278,6 +286,10 @@ struct AtmoResult {
 	vec3 scattering;
 };
 
+AtmoResult default_atmo_result() {
+	return AtmoResult(1.0, vec3(0.0));
+}
+
 AtmoResult compute_atmosphere(
 	vec3 ray_origin,
 	vec3 ray_dir,
@@ -287,7 +299,9 @@ AtmoResult compute_atmosphere(
 	// float linear_depth,
 	vec3 sun_dir,
 	float jitter,
-	AtmosphereSettings atmo
+	AtmosphereSettings atmo,
+	float min_t,
+	out AtmoResult min_result
 ) {
 	// Rocky planets don't need many steps (8 can be enough).
 	// However gas giants need a lot more (64?) since rays traverse it fully.
@@ -302,12 +316,19 @@ AtmoResult compute_atmosphere(
 	scattering_coefficients = mix(vec3(1.0), scattering_coefficients, atmo.scattering_strength);
 
 	float step_len = (t_end - t_begin) / float(steps);
+
+	float total_transmittance = 1.0;
 	vec3 total_light = vec3(0.0);
+
+	float total_transmittance_min = 1.0;
+	vec3 total_light_min = vec3(0.0);
+
 	float view_ray_optical_depth = 0.0;
 	// float alpha = 0.0;
-	float total_transmittance = 1.0;
 	vec3 pos0 = ray_origin + ray_dir * t_begin;
 	vec3 pos = pos0;
+
+	float distance_travelled = t_begin;
 
 	for (int i = 0; i < steps; ++i) {
 		float sun_ray_optical_depth = get_baked_optical_depth(
@@ -331,17 +352,27 @@ AtmoResult compute_atmosphere(
 		float vtransmittance = exp(-local_density * step_len);
 		total_transmittance *= vtransmittance;
 
+		if (distance_travelled < min_t) {
+			total_transmittance_min = total_transmittance;
+			total_light_min = total_light;
+		}
+
 		pos += ray_dir * step_len;
+		distance_travelled += step_len;
 	}
 
 	total_light = clamp(total_light + atmo.ambient_color, vec3(0.0), vec3(1.0));
-
+	total_light *= atmo.modulate;
 	// Get rid of color banding.
 	// Make sure it doesn't go out of bounds.
 	// Also for some reason clamping to 1.0 caused HDR sunsets to be noisy
 	total_transmittance = clamp(total_transmittance + jitter * 0.02, 0.0, 0.99);
 
-	total_light *= atmo.modulate;
+	total_light_min = clamp(total_light_min + atmo.ambient_color, vec3(0.0), vec3(1.0));
+	total_light_min *= atmo.modulate;
+	total_transmittance_min = clamp(total_transmittance_min + jitter * 0.02, 0.0, 0.99);
+
+	min_result = AtmoResult(total_transmittance_min, total_light_min);
 
 	return AtmoResult(total_transmittance, total_light);
 }
@@ -569,7 +600,9 @@ CloudResult raymarch_cloud(
 	vec3 cam_pos,
 	CloudSettings settings,
 	vec4 point_light,
-	float night_light_energy
+	float night_light_energy,
+	float min_t,
+	out CloudResult min_result
 ) {
 
 	// {
@@ -633,6 +666,8 @@ CloudResult raymarch_cloud(
 
 	CloudResult result = default_cloud_result();
 	const float break_transmittance = 0.01;
+
+	min_result = default_cloud_result();
 
 	// float current_step_len = lq_step_len;
 
@@ -718,6 +753,10 @@ CloudResult raymarch_cloud(
 					result.depth = min(result.depth, distance(ray_origin, pos));
 				}
 
+				if (dist_travelled < min_t) {
+					min_result = result;
+				}
+
 			} else {
 				step_len = hq_step_len;
 			}
@@ -727,8 +766,13 @@ CloudResult raymarch_cloud(
 	}
 
 	const vec3 cloud_color = vec3(1.0);
+
 	result.scattering = result.scattering * cloud_color;
 	result.transmittance = clamp(result.transmittance, vec3(0.0), vec3(1.0));
+
+	min_result.scattering = min_result.scattering * cloud_color;
+	min_result.transmittance = clamp(min_result.transmittance, vec3(0.0), vec3(1.0));
+
 	return result;
 }
 
@@ -752,11 +796,14 @@ CloudResult render_clouds(
     float time,
     CloudSettings cloud_settings,
 	vec4 point_light,
-	float night_light_energy
+	float night_light_energy,
+	float min_t,
+	out CloudResult min_result
 ) {
 	vec2 rs_clouds_top = ray_sphere(planet_center_viewspace, cloud_settings.top_height, ray_origin, ray_dir);
 
 	CloudResult result = default_cloud_result();
+	min_result = default_cloud_result();
 
 	if (rs_clouds_top.x != rs_clouds_top.y) {
 		vec2 rs_clouds_bottom = ray_sphere(planet_center_viewspace, cloud_settings.bottom_height, ray_origin, ray_dir);
@@ -794,7 +841,9 @@ CloudResult render_clouds(
 				cam_pos_model,
                 cloud_settings,
 				point_light,
-				night_light_energy
+				night_light_energy,
+				min_t,
+				min_result
             );
 		}
 	}
@@ -806,8 +855,7 @@ CloudResult render_clouds(
 // Main
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-float compute_linear_depth(vec2 screen_uv, out vec4 view_coords) {
-	float nonlinear_depth = texture(u_depth_texture, screen_uv).x;
+float compute_linear_depth_from_nonlinear(vec2 screen_uv, float nonlinear_depth, out vec4 view_coords) {
 	// Note, we assume Vulkan here, which has NDC in 0..1 (OpenGL is -1..1)
 	vec3 ndc = vec3(screen_uv * 2.0 - 1.0, nonlinear_depth);
 	view_coords = u_cam_params.inv_projection_matrix * vec4(ndc, 1.0);
@@ -822,18 +870,84 @@ float compute_linear_depth(vec2 screen_uv, out vec4 view_coords) {
     return linear_depth;
 }
 
+float compute_linear_depth(vec2 screen_uv, out vec4 view_coords) {
+	float nonlinear_depth = texture(u_depth_texture, screen_uv).x;
+	return compute_linear_depth_from_nonlinear(screen_uv, nonlinear_depth, view_coords);
+}
+
+vec2 compute_linear_depth_2x2_min_max(
+		vec2 screen_uv, 
+		vec2 screen_ps, 
+		out vec4 view_coords_min, 
+		out vec4 view_coords_max
+) {
+	vec2 screen_uv00 = screen_uv;
+	vec2 screen_uv10 = screen_uv + vec2(screen_ps.x, 0.0);
+	vec2 screen_uv01 = screen_uv + vec2(0.0, screen_ps.y);
+	vec2 screen_uv11 = screen_uv + screen_ps;
+
+	float nonlinear_depth00 = texture(u_depth_texture, screen_uv00).x;
+	float nonlinear_depth10 = texture(u_depth_texture, screen_uv10).x;
+	float nonlinear_depth01 = texture(u_depth_texture, screen_uv01).x;
+	float nonlinear_depth11 = texture(u_depth_texture, screen_uv11).x;
+
+	float nonlinear_depth_min = min(
+		min(nonlinear_depth00, nonlinear_depth10), 
+		min(nonlinear_depth01, nonlinear_depth11)
+	);
+	float nonlinear_depth_max = max(
+		max(nonlinear_depth00, nonlinear_depth10), 
+		max(nonlinear_depth01, nonlinear_depth11)
+	);
+
+	vec2 screen_uv_min = 
+		nonlinear_depth_min == nonlinear_depth00 ? screen_uv00 :
+		nonlinear_depth_min == nonlinear_depth10 ? screen_uv10 :
+		nonlinear_depth_min == nonlinear_depth01 ? screen_uv01 :
+		screen_uv11;
+
+	vec2 screen_uv_max = 
+		nonlinear_depth_max == nonlinear_depth00 ? screen_uv00 :
+		nonlinear_depth_max == nonlinear_depth10 ? screen_uv10 :
+		nonlinear_depth_max == nonlinear_depth01 ? screen_uv01 :
+		screen_uv11;
+
+	// We assume reverse-Z so higher nonlinear depth is actually lower
+	return vec2(
+		// Min linear depth
+		compute_linear_depth_from_nonlinear(screen_uv_max, nonlinear_depth_max, view_coords_min),
+		// Max linear depth
+		compute_linear_depth_from_nonlinear(screen_uv_min, nonlinear_depth_min, view_coords_max)
+	);
+}
+
 void main() {
     ivec2 fragcoord = ivec2(gl_GlobalInvocationID.xy);
-    ivec2 size = ivec2(u_pc_params.raster_size);
+    ivec2 image_size = ivec2(u_pc_params.raster_size);
 
-    if (fragcoord.x >= size.x || fragcoord.y >= size.y) {
+    if (fragcoord.x >= image_size.x || fragcoord.y >= image_size.y) {
         return;
     }
 
-    vec2 screen_uv = vec2(fragcoord) / vec2(size);
+	// ivec2 screen_size = image_size * 2;
+	ivec2 screen_size = ivec2(u_pc_params.screen_size);
+	vec2 screen_ps = vec2(1.0) / vec2(screen_size);
+	vec2 screen_uv = vec2(fragcoord * 2) * screen_ps; // top-left screen pixel within our low-res pixel
+	// vec2 screen_uv = vec2(fragcoord) / vec2(image_size);
+	screen_uv += screen_ps * 0.5; // Sample at center
+	// screen_uv += screen_ps * u_pc_params.debug_value;
 
-    vec4 view_coords;
-    float linear_depth = compute_linear_depth(screen_uv, view_coords);
+	// vec2 image_ps = vec2(1.0) / vec2(image_size);
+    // vec2 image_uv = vec2(fragcoord) * image_ps;
+
+    vec4 view_coords_min;
+    vec4 view_coords_max;
+    vec2 linear_depths = compute_linear_depth_2x2_min_max(screen_uv, screen_ps, view_coords_min, view_coords_max);
+	float linear_depth_min = linear_depths.x;
+	float linear_depth_max = linear_depths.y;
+
+	vec4 view_coords = view_coords_max;
+	float linear_depth = linear_depth_max;
 
 	// We'll evaluate the atmosphere in view space
 	vec3 ray_origin = vec3(0.0, 0.0, 0.0);
@@ -847,6 +961,7 @@ void main() {
 	// we have to account for the near and far clips properly, so they can be composed seamlessly
 
 	CloudResult cr = default_cloud_result();
+	CloudResult cr2 = default_cloud_result();
 
 	if (rs_atmo.x != rs_atmo.y) {
 		float t_begin = max(rs_atmo.x, 0.0);
@@ -932,6 +1047,14 @@ void main() {
 		);
 		cs.sunset_sharpness =         u_params.cloud_sunset_sharpness;
 
+		vec4 point_light = vec4(
+			u_params.point_light_pos_x,
+			u_params.point_light_pos_y,
+			u_params.point_light_pos_z,
+			u_params.point_light_radius
+		);
+
+#ifdef ENABLE_CLOUDS
         cr = render_clouds(
             planet_center_viewspace,
             ray_origin,
@@ -943,16 +1066,16 @@ void main() {
             jitter,
             time,
             cs,
-			vec4(
-				u_params.point_light_pos_x,
-				u_params.point_light_pos_y,
-				u_params.point_light_pos_z,
-				u_params.point_light_radius
-			),
-			u_params.night_light_energy
+			point_light,
+			u_params.night_light_energy,
+			linear_depth_min,
+			cr2
         );
+#endif
 
+#ifdef ENABLE_ATMO
 		// AtmoIntegration atmo_integ = AtmoIntegration_init();
+		AtmoResult atmo_result2 = default_atmo_result();
 		AtmoResult atmo_result = compute_atmosphere(
 			ray_origin, 
 			ray_dir, 
@@ -962,7 +1085,9 @@ void main() {
 			// linear_depth, 
 			sun_dir_viewspace, 
 			jitter,
-			atmo
+			atmo,
+			linear_depth_min,
+			atmo_result2
 			// atmo_integ
 		);
 
@@ -972,8 +1097,14 @@ void main() {
 		cr.scattering += cr.transmittance * atmo_result.scattering;
 		cr.transmittance *= atmo_result.transmittance;
 
+		vec3 c2_transmittance = cr2.transmittance;
+		cr2.scattering += cr2.transmittance * atmo_result2.scattering;
+		cr2.transmittance *= atmo_result2.transmittance;
+
 		if (cr.depth < CloudResult_MAX_DEPTH) {
-			AtmoResult atmo_result2 = compute_atmosphere(
+			// On top of clouds
+
+			AtmoResult atmo_result_front = compute_atmosphere(
 				ray_origin, 
 				ray_dir, 
 				planet_center_viewspace,
@@ -981,11 +1112,16 @@ void main() {
 				cr.depth, 
 				sun_dir_viewspace, 
 				jitter,
-				atmo
+				atmo,
+				linear_depth_min,
+				atmo_result2
 			);
 
-			cr.scattering = mix(atmo_result2.scattering, cr.scattering, 
-				mix(atmo_result2.transmittance, 1.0, c_transmittance.r));
+			cr.scattering = mix(atmo_result_front.scattering, cr.scattering, 
+				mix(atmo_result_front.transmittance, 1.0, c_transmittance.r));
+
+			cr2.scattering = mix(atmo_result_front.scattering, cr2.scattering, 
+				mix(atmo_result_front.transmittance, 1.0, c2_transmittance.r));
 
 			// float fmin = 10.0;
 			// float fmax = 40.0;
@@ -993,6 +1129,7 @@ void main() {
 			// cr.transmittance = mix(cr.transmittance, vec3(atmo_result.transmittance), f);
 			// cr.scattering = mix(cr.scattering, atmo_result.scattering, f);
 		}
+#endif
 	}
 
 #ifdef FULL_RES
@@ -1004,8 +1141,36 @@ void main() {
 #else
 	// imageStore(u_output_image0, fragcoord, vec4(cr.transmittance, sqrt(cr.scattering.r)));
 	// imageStore(u_output_image1, fragcoord, vec4(sqrt(cr.scattering.gb), 0.0, 0.0));
-	imageStore(u_output_image0, fragcoord, vec4(cr.transmittance, cr.scattering.r));
-	imageStore(u_output_image1, fragcoord, vec4(cr.scattering.gb, 0.0, 0.0));
+
+	// if (fract(u_pc_params.time) < 0.5) {
+	// 	cr.scattering = cr2.scattering;
+	// 	cr.transmittance = cr2.transmittance;
+	// }
+	// cr.depth = 0.0;
+	// cr2 = cr;
+
+	imageStore(u_output_image0, fragcoord, vec4(
+		cr.transmittance.r,
+		cr.transmittance.g,
+		cr.transmittance.b,
+		cr.scattering.r
+	));
+	imageStore(u_output_image1, fragcoord, vec4(
+		cr.scattering.g,
+		cr.scattering.b,
+		cr2.transmittance.r,
+		cr2.transmittance.g
+	));
+	imageStore(u_output_image2, fragcoord, vec4(
+		cr2.transmittance.b,
+		cr2.scattering.r,
+		cr2.scattering.g,
+		cr2.scattering.b
+	));
+	imageStore(u_output_image3, fragcoord, vec4(cr.depth));
+
+	// float dep = fract(0.1*mix(linear_depth_min, linear_depth_max, fract(u_pc_params.time)));
+	// imageStore(u_output_image1, fragcoord, vec4(dep, dep, 0.0, 0.0));
 
 #endif
 

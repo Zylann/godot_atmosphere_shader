@@ -177,6 +177,8 @@ var _params_ubo: RID
 var _cam_params_ubo: RID
 var _cloud_buffer0: RID
 var _cloud_buffer1: RID
+var _cloud_buffer2: RID
+var _cloud_buffer3: RID
 
 var _frame_counter := 0
 var _point_light := PointLightInfo.new()
@@ -285,6 +287,14 @@ func _clear_cloud_buffers() -> void:
 		_rd.free_rid(_cloud_buffer1)
 		_cloud_buffer1 = RID()
 
+	if _cloud_buffer2.is_valid():
+		_rd.free_rid(_cloud_buffer2)
+		_cloud_buffer2 = RID()
+
+	if _cloud_buffer3.is_valid():
+		_rd.free_rid(_cloud_buffer3)
+		_cloud_buffer3 = RID()
+
 
 func _notification(what: int) -> void:
 	match what:
@@ -307,6 +317,12 @@ func _notification(what: int) -> void:
 
 			if _cloud_buffer1.is_valid():
 				_rd.free_rid(_cloud_buffer1)
+
+			if _cloud_buffer2.is_valid():
+				_rd.free_rid(_cloud_buffer2)
+
+			if _cloud_buffer3.is_valid():
+				_rd.free_rid(_cloud_buffer3)
 
 			_optical_depth.deinit(_rd)
 
@@ -402,15 +418,17 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 				RenderingDevice.TEXTURE_USAGE_STORAGE_BIT | \
 				RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT
 			_cloud_buffer0 = _rd.texture_create(format0, RDTextureView.new(), [])
+			_cloud_buffer1 = _rd.texture_create(format0, RDTextureView.new(), [])
+			_cloud_buffer2 = _rd.texture_create(format0, RDTextureView.new(), [])
 
-			var format1 := RDTextureFormat.new()
-			format1.width = cloud_buffer_res.x
-			format1.height = cloud_buffer_res.y
-			format1.format = RenderingDevice.DATA_FORMAT_R8G8_UNORM
-			format1.usage_bits = \
+			var format3 := RDTextureFormat.new()
+			format3.width = cloud_buffer_res.x
+			format3.height = cloud_buffer_res.y
+			format3.format = RenderingDevice.DATA_FORMAT_R32_SFLOAT
+			format3.usage_bits = \
 				RenderingDevice.TEXTURE_USAGE_STORAGE_BIT | \
 				RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT
-			_cloud_buffer1 = _rd.texture_create(format1, RDTextureView.new(), [])
+			_cloud_buffer3 = _rd.texture_create(format3, RDTextureView.new(), [])
 
 	var time_seconds := Time.get_ticks_msec() / 1000.0
 
@@ -454,13 +472,22 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 	push_constant.push_back(coverage_rotation_x.y)
 	push_constant.push_back(debug_value)
 	push_constant.push_back(0.0)
-	
+
+	push_constant.push_back(size.x)
+	push_constant.push_back(size.y)
+	push_constant.push_back(0.0)
+	push_constant.push_back(0.0)
+
 	var post_push_constant := PackedFloat32Array()
 	if not _full_res:
 		post_push_constant.push_back(size.x)
 		post_push_constant.push_back(size.y)
 		post_push_constant.push_back(cloud_buffer_res.x)
 		post_push_constant.push_back(cloud_buffer_res.y)
+		post_push_constant.push_back(time_seconds)
+		post_push_constant.push_back(debug_value)
+		post_push_constant.push_back(0.0)
+		post_push_constant.push_back(0.0)
 	
 	var cam_params_f32 := _make_camera_params_f32(scene_data)
 	var cam_params_bytes := cam_params_f32.to_byte_array()
@@ -477,6 +504,8 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 		var color_image_uniform: RDUniform
 		var cloud_buffer0_uniform: RDUniform
 		var cloud_buffer1_uniform: RDUniform
+		var cloud_buffer2_uniform: RDUniform
+		var cloud_buffer3_uniform: RDUniform
 		
 		var color_image := render_scene_buffers.get_color_layer(view_index)
 		color_image_uniform = RDUniform.new()
@@ -494,11 +523,21 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 			cloud_buffer1_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
 			cloud_buffer1_uniform.binding = 1
 			cloud_buffer1_uniform.add_id(_cloud_buffer1)
-		
+
+			cloud_buffer2_uniform = RDUniform.new()
+			cloud_buffer2_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+			cloud_buffer2_uniform.binding = 2
+			cloud_buffer2_uniform.add_id(_cloud_buffer2)
+
+			cloud_buffer3_uniform = RDUniform.new()
+			cloud_buffer3_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+			cloud_buffer3_uniform.binding = 3
+			cloud_buffer3_uniform.add_id(_cloud_buffer3)
+
 		var depth_image := render_scene_buffers.get_depth_layer(view_index)
 		var depth_texture_uniform := RDUniform.new()
 		depth_texture_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
-		depth_texture_uniform.binding = 2
+		depth_texture_uniform.binding = 4
 		depth_texture_uniform.add_id(_nearest_sampler)
 		depth_texture_uniform.add_id(depth_image)
 		
@@ -507,7 +546,7 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 		var cloud_coverage_cubemap_uniform := RDUniform.new()
 		cloud_coverage_cubemap_uniform.uniform_type = \
 			RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
-		cloud_coverage_cubemap_uniform.binding = 3
+		cloud_coverage_cubemap_uniform.binding = 5
 		cloud_coverage_cubemap_uniform.add_id(_linear_sampler)
 		cloud_coverage_cubemap_uniform.add_id(cloud_coverage_cubemap_rd)
 		
@@ -516,7 +555,7 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 		var cloud_shape_texture_uniform := RDUniform.new()
 		cloud_shape_texture_uniform.uniform_type = \
 			RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
-		cloud_shape_texture_uniform.binding = 4
+		cloud_shape_texture_uniform.binding = 6
 		cloud_shape_texture_uniform.add_id(_linear_sampler)
 		cloud_shape_texture_uniform.add_id(cloud_shape_texture_rd)
 
@@ -525,7 +564,7 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 		var cloud_detail_texture_uniform := RDUniform.new()
 		cloud_detail_texture_uniform.uniform_type = \
 			RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
-		cloud_detail_texture_uniform.binding = 5
+		cloud_detail_texture_uniform.binding = 7
 		cloud_detail_texture_uniform.add_id(_linear_sampler)
 		cloud_detail_texture_uniform.add_id(cloud_detail_texture_rd)
 		
@@ -533,13 +572,13 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 			RenderingServer.texture_get_rd_texture(_blue_noise_texture.get_rid())
 		var blue_noise_texture_uniform := RDUniform.new()
 		blue_noise_texture_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
-		blue_noise_texture_uniform.binding = 6
+		blue_noise_texture_uniform.binding = 8
 		blue_noise_texture_uniform.add_id(_linear_sampler)
 		blue_noise_texture_uniform.add_id(blue_noise_texture_rd)
 
 		var optical_depth_texture_uniform := RDUniform.new()
 		optical_depth_texture_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
-		optical_depth_texture_uniform.binding = 7
+		optical_depth_texture_uniform.binding = 9
 		optical_depth_texture_uniform.add_id(_linear_sampler_clamp)
 		# if _frame_counter < 10:
 		# 	var ph := RenderingServer.texture_get_rd_texture(_white_texture.get_rid())
@@ -549,12 +588,12 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 
 		var params_uniform := RDUniform.new()
 		params_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_UNIFORM_BUFFER
-		params_uniform.binding = 8
+		params_uniform.binding = 10
 		params_uniform.add_id(_params_ubo)
 
 		var cam_params_uniform := RDUniform.new()
 		cam_params_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_UNIFORM_BUFFER
-		cam_params_uniform.binding = 9
+		cam_params_uniform.binding = 11
 		cam_params_uniform.add_id(_cam_params_ubo)
 		
 		var uniform_set_items: Array[RDUniform]
@@ -575,6 +614,8 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 			uniform_set_items = [
 				cloud_buffer0_uniform,
 				cloud_buffer1_uniform,
+				cloud_buffer2_uniform,
+				cloud_buffer3_uniform,
 				depth_texture_uniform,
 				cloud_coverage_cubemap_uniform,
 				cloud_shape_texture_uniform,
@@ -596,20 +637,44 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 			var input_cloud0_uniform := RDUniform.new()
 			input_cloud0_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 			input_cloud0_uniform.binding = 2
-			input_cloud0_uniform.add_id(_linear_sampler)
+			input_cloud0_uniform.add_id(_nearest_sampler)
+			# input_cloud0_uniform.add_id(_linear_sampler)
 			input_cloud0_uniform.add_id(_cloud_buffer0)
 
 			var input_cloud1_uniform := RDUniform.new()
 			input_cloud1_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 			input_cloud1_uniform.binding = 3
-			input_cloud1_uniform.add_id(_linear_sampler)
+			input_cloud1_uniform.add_id(_nearest_sampler)
+			# input_cloud1_uniform.add_id(_linear_sampler)
 			input_cloud1_uniform.add_id(_cloud_buffer1)
-			
+
+			var input_cloud2_uniform := RDUniform.new()
+			input_cloud2_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+			input_cloud2_uniform.binding = 4
+			input_cloud2_uniform.add_id(_nearest_sampler)
+			# input_cloud2_uniform.add_id(_linear_sampler)
+			input_cloud2_uniform.add_id(_cloud_buffer2)
+
+			var input_cloud3_uniform := RDUniform.new()
+			input_cloud3_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+			input_cloud3_uniform.binding = 5
+			input_cloud3_uniform.add_id(_nearest_sampler)
+			# input_cloud3_uniform.add_id(_linear_sampler)
+			input_cloud3_uniform.add_id(_cloud_buffer3)
+
+			var post_cam_params_uniform := RDUniform.new()
+			post_cam_params_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_UNIFORM_BUFFER
+			post_cam_params_uniform.binding = 6
+			post_cam_params_uniform.add_id(_cam_params_ubo)
+
 			var post_uniform_set_items = [
 				color_image_uniform,
 				depth_texture_uniform2,
 				input_cloud0_uniform,
-				input_cloud1_uniform
+				input_cloud1_uniform,
+				input_cloud2_uniform,
+				input_cloud3_uniform,
+				post_cam_params_uniform
 			]
 			
 			post_uniform_set = UniformSetCacheRD.get_cache(_post_shader_rid, 0, post_uniform_set_items)
