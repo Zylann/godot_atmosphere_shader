@@ -25,7 +25,7 @@ layout(push_constant, std430) uniform PcParams {
     float time;
     float debug;
     float depth_threshold;
-    float reserved2;
+    float bicubic;
 } u_pc_params;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -165,6 +165,7 @@ void upsample_depth_aware(
     vec2 screen_res,
     mat4 inv_projection,
     float depth_threshold,
+    bool bicubic,
     out vec4 result0,
     out vec4 result1,
     out vec4 debug
@@ -228,10 +229,13 @@ void upsample_depth_aware(
         // result1.r = 1.0;
         // result1.g = 0.0;
     } else {
-        // result0 = texture_2d_bicubic(low_data_tex0, screen_uv, low_res);
-        // result1 = texture_2d_bicubic(low_data_tex1, screen_uv, low_res);
-        result0 = texture(low_data_tex0, screen_uv);
-        result1 = texture(low_data_tex1, screen_uv);
+        if (bicubic) {
+            result0 = texture_2d_bicubic(low_data_tex0, screen_uv, low_res);
+            result1 = texture_2d_bicubic(low_data_tex1, screen_uv, low_res);
+        } else {
+            result0 = texture(low_data_tex0, screen_uv);
+            result1 = texture(low_data_tex1, screen_uv);
+        }
     }
 }
 
@@ -275,6 +279,7 @@ void main() {
         size,
         u_cam_params.inv_projection_matrix,
         u_pc_params.depth_threshold,
+        u_pc_params.bicubic != 0.0,
         cloud_data0,
         cloud_data1,
         upsample_debug

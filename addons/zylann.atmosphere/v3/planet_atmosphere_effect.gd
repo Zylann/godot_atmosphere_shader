@@ -55,6 +55,7 @@ extends CompositorEffect
 
 @export_group("Upscaling", "upscaling")
 @export var upscaling_depth_threshold := 1.0
+@export var upscaling_bicubic := false
 
 @export_group("Debug")
 @export var debug_value := 0.0;
@@ -490,7 +491,7 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 		post_push_constant.push_back(time_seconds)
 		post_push_constant.push_back(debug_value)
 		post_push_constant.push_back(upscaling_depth_threshold)
-		post_push_constant.push_back(0.0)
+		post_push_constant.push_back(1.0 if upscaling_bicubic else 0.0)
 	
 	var cam_params_f32 := _make_camera_params_f32(scene_data)
 	var cam_params_bytes := cam_params_f32.to_byte_array()
