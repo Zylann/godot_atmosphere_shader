@@ -53,6 +53,9 @@ extends CompositorEffect
 @export_range(1, 8) var clouds_main_light_steps := 6
 @export_range(1, 8) var clouds_secondary_light_steps := 3
 
+@export_group("Upscaling", "upscaling")
+@export var upscaling_depth_threshold := 1.0
+
 @export_group("Debug")
 @export var debug_value := 0.0;
 
@@ -486,7 +489,7 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 		post_push_constant.push_back(cloud_buffer_res.y)
 		post_push_constant.push_back(time_seconds)
 		post_push_constant.push_back(debug_value)
-		post_push_constant.push_back(0.0)
+		post_push_constant.push_back(upscaling_depth_threshold)
 		post_push_constant.push_back(0.0)
 	
 	var cam_params_f32 := _make_camera_params_f32(scene_data)
@@ -637,22 +640,22 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 			var input_cloud0_uniform := RDUniform.new()
 			input_cloud0_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 			input_cloud0_uniform.binding = 2
-			input_cloud0_uniform.add_id(_nearest_sampler)
-			# input_cloud0_uniform.add_id(_linear_sampler)
+			# input_cloud0_uniform.add_id(_nearest_sampler)
+			input_cloud0_uniform.add_id(_linear_sampler)
 			input_cloud0_uniform.add_id(_cloud_buffer0)
 
 			var input_cloud1_uniform := RDUniform.new()
 			input_cloud1_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 			input_cloud1_uniform.binding = 3
-			input_cloud1_uniform.add_id(_nearest_sampler)
-			# input_cloud1_uniform.add_id(_linear_sampler)
+			# input_cloud1_uniform.add_id(_nearest_sampler)
+			input_cloud1_uniform.add_id(_linear_sampler)
 			input_cloud1_uniform.add_id(_cloud_buffer1)
 
 			var input_cloud2_uniform := RDUniform.new()
 			input_cloud2_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 			input_cloud2_uniform.binding = 4
-			input_cloud2_uniform.add_id(_nearest_sampler)
-			# input_cloud2_uniform.add_id(_linear_sampler)
+			# input_cloud2_uniform.add_id(_nearest_sampler)
+			input_cloud2_uniform.add_id(_linear_sampler)
 			input_cloud2_uniform.add_id(_cloud_buffer2)
 
 			var input_cloud3_uniform := RDUniform.new()
