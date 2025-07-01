@@ -181,7 +181,6 @@ var _params_ubo: RID
 var _cam_params_ubo: RID
 var _cloud_buffer0: RID
 var _cloud_buffer1: RID
-var _cloud_buffer2: RID
 var _cloud_buffer3: RID
 
 var _frame_counter := 0
@@ -291,10 +290,6 @@ func _clear_cloud_buffers() -> void:
 		_rd.free_rid(_cloud_buffer1)
 		_cloud_buffer1 = RID()
 
-	if _cloud_buffer2.is_valid():
-		_rd.free_rid(_cloud_buffer2)
-		_cloud_buffer2 = RID()
-
 	if _cloud_buffer3.is_valid():
 		_rd.free_rid(_cloud_buffer3)
 		_cloud_buffer3 = RID()
@@ -321,9 +316,6 @@ func _notification(what: int) -> void:
 
 			if _cloud_buffer1.is_valid():
 				_rd.free_rid(_cloud_buffer1)
-
-			if _cloud_buffer2.is_valid():
-				_rd.free_rid(_cloud_buffer2)
 
 			if _cloud_buffer3.is_valid():
 				_rd.free_rid(_cloud_buffer3)
@@ -422,8 +414,15 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 				RenderingDevice.TEXTURE_USAGE_STORAGE_BIT | \
 				RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT
 			_cloud_buffer0 = _rd.texture_create(format0, RDTextureView.new(), [])
-			_cloud_buffer1 = _rd.texture_create(format0, RDTextureView.new(), [])
-			_cloud_buffer2 = _rd.texture_create(format0, RDTextureView.new(), [])
+
+			var format1 := RDTextureFormat.new()
+			format1.width = cloud_buffer_res.x
+			format1.height = cloud_buffer_res.y
+			format1.format = RenderingDevice.DATA_FORMAT_R8G8_UNORM
+			format1.usage_bits = \
+				RenderingDevice.TEXTURE_USAGE_STORAGE_BIT | \
+				RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT
+			_cloud_buffer1 = _rd.texture_create(format1, RDTextureView.new(), [])
 
 			var format3 := RDTextureFormat.new()
 			format3.width = cloud_buffer_res.x
@@ -527,11 +526,6 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 			cloud_buffer1_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
 			cloud_buffer1_uniform.binding = 1
 			cloud_buffer1_uniform.add_id(_cloud_buffer1)
-
-			cloud_buffer2_uniform = RDUniform.new()
-			cloud_buffer2_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
-			cloud_buffer2_uniform.binding = 2
-			cloud_buffer2_uniform.add_id(_cloud_buffer2)
 
 			cloud_buffer3_uniform = RDUniform.new()
 			cloud_buffer3_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
@@ -652,13 +646,6 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 			input_cloud1_uniform.add_id(_linear_sampler)
 			input_cloud1_uniform.add_id(_cloud_buffer1)
 
-			var input_cloud2_uniform := RDUniform.new()
-			input_cloud2_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
-			input_cloud2_uniform.binding = 4
-			# input_cloud2_uniform.add_id(_nearest_sampler)
-			input_cloud2_uniform.add_id(_linear_sampler)
-			input_cloud2_uniform.add_id(_cloud_buffer2)
-
 			var input_cloud3_uniform := RDUniform.new()
 			input_cloud3_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 			input_cloud3_uniform.binding = 5
@@ -676,7 +663,6 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 				depth_texture_uniform2,
 				input_cloud0_uniform,
 				input_cloud1_uniform,
-				input_cloud2_uniform,
 				input_cloud3_uniform,
 				post_cam_params_uniform
 			]

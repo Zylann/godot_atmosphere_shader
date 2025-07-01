@@ -40,7 +40,6 @@ layout(rgba16f, set = 0, binding = 0) uniform image2D u_input_image;
 #else
 layout(rgba8, set = 0, binding = 0) uniform image2D u_output_image0;
 layout(rgba8, set = 0, binding = 1) uniform image2D u_output_image1;
-layout(rgba8, set = 0, binding = 2) uniform image2D u_output_image2;
 layout(r32f, set = 0, binding = 3) uniform image2D u_output_image3;
 #endif
 

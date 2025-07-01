@@ -10,7 +10,6 @@ layout(binding = 1) uniform sampler2D u_depth_texture;
 
 layout(binding = 2) uniform sampler2D u_cloud_render0;
 layout(binding = 3) uniform sampler2D u_cloud_render1;
-layout(binding = 4) uniform sampler2D u_cloud_render2;
 layout(binding = 5) uniform sampler2D u_cloud_render3; // depth
 
 // Camera
