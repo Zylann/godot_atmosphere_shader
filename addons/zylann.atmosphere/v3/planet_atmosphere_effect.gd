@@ -234,9 +234,9 @@ func _init_render() -> void:
 	ss = RDSamplerState.new()
 	ss.min_filter = RenderingDevice.SAMPLER_FILTER_LINEAR
 	ss.mag_filter = RenderingDevice.SAMPLER_FILTER_LINEAR
-	ss.repeat_u = RenderingDevice.SAMPLER_REPEAT_MODE_CLAMP_TO_BORDER
-	ss.repeat_v = RenderingDevice.SAMPLER_REPEAT_MODE_CLAMP_TO_BORDER
-	ss.repeat_w = RenderingDevice.SAMPLER_REPEAT_MODE_CLAMP_TO_BORDER
+	ss.repeat_u = RenderingDevice.SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE
+	ss.repeat_v = RenderingDevice.SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE
+	ss.repeat_w = RenderingDevice.SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE
 	_linear_sampler_clamp = _rd.sampler_create(ss)
 
 	var params_f32 := _make_params_f32()

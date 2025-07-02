@@ -276,9 +276,35 @@ float get_baked_optical_depth(
 
 	// TODO Account for samples taken below planet surface
 	// they can be added as a linear equation since density is constant
+	// if (height < 0.0) {
+	// 	vec2 rs = ray_sphere(planet_center, atmo.planet_radius, pos, dir);
+	// 	float distance_to_surface = rs.y;
+	// } else {
+	// }
 
-	return pow2(texture(optical_depth_texture, vec2(uvx, height_ratio)).r);
+	// return pow2(texture(optical_depth_texture, vec2(uvx, height_ratio)).r);
+	return texture(optical_depth_texture, vec2(uvx, height_ratio)).r;
 }
+
+// float get_optical_depth(vec3 ray_origin, vec3 ray_dir, vec3 planet_center, AtmosphereSettings atmo) {
+// 	vec2 rs = ray_sphere(
+// 		planet_center,
+// 		atmo.planet_radius + atmo.height,
+// 		ray_origin,
+// 		ray_dir
+// 	);
+// 	float distance_through_atmosphere = rs.y - max(rs.x, 0.0);
+// 	const int steps = 64;
+// 	float step_len = distance_through_atmosphere / float(steps);
+// 	float optical_depth = 0.0;
+// 	for (int i = 0; i < steps; ++i) {
+// 		vec3 pos = ray_origin + ray_dir * step_len * float(i);
+// 		float d = distance(pos, planet_center);
+// 		float density = get_atmosphere_density(d, atmo);
+// 		optical_depth += density * step_len * atmo.density;
+// 	}
+// 	return optical_depth;
+// }
 
 struct AtmoResult {
 	float transmittance;
@@ -335,6 +361,12 @@ AtmoResult compute_atmosphere(
 			u_optical_depth_texture, 
 			atmo
 		);
+		// float sun_ray_optical_depth = get_optical_depth(
+		// 	pos, 
+		// 	sun_dir, 
+		// 	planet_center, 
+		// 	atmo
+		// );
 
 		float height = distance(pos, planet_center);
 		float local_density = get_atmosphere_density(height, atmo);
@@ -1103,7 +1135,8 @@ void main() {
 #endif
 
 	// DEBUG
-	// float od = texture(u_optical_depth_texture, screen_uv).r;
+	// vec2 screen_uv = vec2(fragcoord) / vec2(image_size);
+	// float od = texture(u_optical_depth_texture, screen_uv*2.0).r;
 	// imageStore(u_output_image0, fragcoord, vec4(vec3(0.1), od)); 
 	// imageStore(u_output_image1, fragcoord, vec4(0.0, 0.0, 0.0, 0.0)); 
 }
