@@ -377,6 +377,7 @@ AtmoResult compute_atmosphere(
 			* scattering_coefficients);
 
 		total_light += local_density * step_len * transmittance * scattering_coefficients;
+		total_light += local_density * atmo.ambient_color;
 
 		float vtransmittance = exp(-local_density * step_len);
 		total_transmittance *= vtransmittance;
@@ -385,7 +386,7 @@ AtmoResult compute_atmosphere(
 		distance_travelled += step_len;
 	}
 
-	total_light = clamp(total_light + atmo.ambient_color, vec3(0.0), vec3(1.0));
+	total_light = clamp(total_light, vec3(0.0), vec3(1.0));
 	total_light *= atmo.modulate;
 	// Get rid of color banding.
 	// Make sure it doesn't go out of bounds.
@@ -978,7 +979,7 @@ void main() {
 		atmo.planet_radius =           u_params.planet_radius;
 		atmo.height =                  u_params.atmosphere_height;
 		atmo.density =                 u_params.atmosphere_density;
-		atmo.ambient_color =           vec3(0.01);
+		atmo.ambient_color =           vec3(0.02);
 		atmo.modulate =                vec3(1.0);
 		atmo.scattering_wavelengths =  vec3(700.0, 530.0, 440.0);
 		atmo.scattering_strength =     u_params.atmosphere_scattering_strength;
