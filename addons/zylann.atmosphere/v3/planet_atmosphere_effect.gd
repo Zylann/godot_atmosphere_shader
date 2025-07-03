@@ -28,11 +28,25 @@ extends CompositorEffect
 @export_range(1.0, 10.0, 0.01) var clouds_sunset_sharpness := 4.0
 
 @export_group("Clouds coverage", "clouds")
+@export var clouds_coverage_cubemap: TextureLayered:
+	set(cm):
+		if cm != null:
+			var is_cubemap = \
+				cm is Cubemap or \
+				cm is CompressedCubemap or \
+				cm is PlaceholderCubemap or \
+				cm is TextureCubemapRD
+			if not is_cubemap:
+				push_warning("Expected a cubemap, got a ", cm.get_class())
+				return
+		clouds_coverage_cubemap = cm
+
 @export_range(0.0, 1.0) var clouds_coverage_factor := 1.0
 @export var clouds_coverage_bias := -0.2
 #var cloud_coverage_rotation_x := Vector2(1.0, 0.0)
 
 @export_group("Clouds shape", "clouds")
+@export var clouds_shape_texture: Texture3D
 @export var clouds_shape_enabled := true
 @export_range(0.0, 1.0) var clouds_shape_factor := 0.6
 @export var clouds_shape_bias := 0.0
@@ -40,6 +54,7 @@ extends CompositorEffect
 @export_range(0.0, 1.0) var clouds_shape_amount := 0.5
 
 @export_group("Clouds detail", "clouds")
+@export var clouds_detail_texture: Texture3D
 @export var clouds_detail_enabled := true
 @export_range(0.0, 1.0) var clouds_detail_factor := 0.6
 @export var clouds_detail_bias := 0.0
@@ -189,16 +204,21 @@ var _last_screen_resolution := Vector2i()
 
 var _optical_depth := OpticalDepth.new()
 
+# Internal references synchronized from the rendering thread,
+# because the rendering server doesn't hold a refcount on them, so if we change them directly from the main thread, 
+# it could unload them and cause "invalid RID" errors when rendering takes place
+var _cloud_coverage_cubemap: TextureLayered
+var _cloud_shape_texture: Texture3D
+var _cloud_detail_texture: Texture3D
+
 const _shader_file = preload("./effect.glsl")
 const _post_shader_file = preload("./post.glsl")
-const _cloud_coverage_cubemap = preload("res://tests/cloud_coverage_2.png")
-const _cloud_shape_texture = preload("res://tests/swirly.tres")
-const _cloud_detail_texture = preload("res://addons/zylann.atmosphere/demo/cloud_shape_texture3d.tres")
 const _blue_noise_texture = preload("res://addons/zylann.atmosphere/blue_noise.png")
 const _white_texture = preload("res://addons/zylann.atmosphere/white.png")
 
 const _callback_type := EFFECT_CALLBACK_TYPE_PRE_TRANSPARENT
 const _full_res := false
+
 
 func _init() -> void:
 	_mutex = Mutex.new()
@@ -364,6 +384,17 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 	if not _update_shader():
 		return
 	if not _optical_depth.update_shader(_rd):
+		return
+	
+	_cloud_coverage_cubemap = clouds_coverage_cubemap
+	_cloud_shape_texture = clouds_shape_texture
+	_cloud_detail_texture = clouds_detail_texture
+
+	if _cloud_coverage_cubemap == null:
+		return
+	if _cloud_shape_texture == null:
+		return
+	if _cloud_detail_texture == null:
 		return
 
 	_frame_counter += 1
@@ -539,8 +570,7 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 		depth_texture_uniform.add_id(_nearest_sampler)
 		depth_texture_uniform.add_id(depth_image)
 		
-		var cloud_coverage_cubemap_rd := \
-			RenderingServer.texture_get_rd_texture(_cloud_coverage_cubemap.get_rid())
+		var cloud_coverage_cubemap_rd := RenderingServer.texture_get_rd_texture(_cloud_coverage_cubemap.get_rid())
 		var cloud_coverage_cubemap_uniform := RDUniform.new()
 		cloud_coverage_cubemap_uniform.uniform_type = \
 			RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
@@ -548,8 +578,7 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 		cloud_coverage_cubemap_uniform.add_id(_linear_sampler)
 		cloud_coverage_cubemap_uniform.add_id(cloud_coverage_cubemap_rd)
 		
-		var cloud_shape_texture_rd := \
-			RenderingServer.texture_get_rd_texture(_cloud_shape_texture.get_rid())
+		var cloud_shape_texture_rd := RenderingServer.texture_get_rd_texture(_cloud_shape_texture.get_rid())
 		var cloud_shape_texture_uniform := RDUniform.new()
 		cloud_shape_texture_uniform.uniform_type = \
 			RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
@@ -557,8 +586,7 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 		cloud_shape_texture_uniform.add_id(_linear_sampler)
 		cloud_shape_texture_uniform.add_id(cloud_shape_texture_rd)
 
-		var cloud_detail_texture_rd := \
-			RenderingServer.texture_get_rd_texture(_cloud_detail_texture.get_rid())
+		var cloud_detail_texture_rd := RenderingServer.texture_get_rd_texture(_cloud_detail_texture.get_rid())
 		var cloud_detail_texture_uniform := RDUniform.new()
 		cloud_detail_texture_uniform.uniform_type = \
 			RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
