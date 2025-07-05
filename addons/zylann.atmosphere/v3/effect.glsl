@@ -63,7 +63,7 @@ layout (binding = 10) uniform Params {
 	float planet_radius;
     float atmosphere_height;
 	float atmosphere_density;
-	float atmosphere_scattering_strength;
+	float reserved0;
 
     float cloud_density_scale;// = 1.0;
 	float cloud_light_density_scale;
@@ -104,13 +104,18 @@ layout (binding = 10) uniform Params {
 
 	float atmo_steps;
 	float cloud_gamma_correction;
-	float reserved1;
-	float reserved2;
+	float atmo_light_density_scale;
+	float planet_shadow_length;
 
-	float cloud_sunset_offset_r;
-	float cloud_sunset_offset_g;
-	float cloud_sunset_offset_b;
-	float cloud_sunset_sharpness;
+	float planet_shadow_offset;
+	float atmo_scattering_r;
+	float atmo_scattering_g;
+	float atmo_scattering_b;
+
+	float atmo_ambient_r;
+	float atmo_ambient_g;
+	float atmo_ambient_b;
+	float reserved1;
 } u_params;
 
 // Camera
@@ -244,8 +249,10 @@ struct AtmosphereSettings {
 	float density;
 	vec3 ambient_color;
 	vec3 modulate;
-	vec3 scattering_wavelengths;
-	float scattering_strength;
+	float light_density_scale;
+	float planet_shadow_length;
+	float planet_shadow_offset;
+	vec3 scattering_coefficients;
 };
 
 float get_atmosphere_density(float height, AtmosphereSettings atmo) {
@@ -282,8 +289,8 @@ float get_baked_optical_depth(
 	// } else {
 	// }
 
-	// return pow2(texture(optical_depth_texture, vec2(uvx, height_ratio)).r);
-	return texture(optical_depth_texture, vec2(uvx, height_ratio)).r;
+	// Technically we wouldn't need to raise to a power, but with small planets it actually looks better
+	return pow2(texture(optical_depth_texture, vec2(uvx, height_ratio)).r) * atmo.light_density_scale;
 }
 
 // float get_optical_depth(vec3 ray_origin, vec3 ray_dir, vec3 planet_center, AtmosphereSettings atmo) {
@@ -303,8 +310,16 @@ float get_baked_optical_depth(
 // 		float density = get_atmosphere_density(d, atmo);
 // 		optical_depth += density * step_len * atmo.density;
 // 	}
-// 	return optical_depth;
+// 	return optical_depth * atmo.light_density_scale;
 // }
+
+float get_planet_shadow(vec3 pos, vec3 planet_center, vec3 sun_dir, float len, float offset) {
+	vec3 up = normalize(pos - planet_center);
+	float dp = dot(up, sun_dir);
+	// float len = 0.2;
+	// float offset = 0.0 + u_pc_params.debug_value;
+	return smoothstep(-len, len, dp + offset);
+}
 
 struct AtmoResult {
 	float transmittance;
@@ -330,13 +345,7 @@ AtmoResult compute_atmosphere(
 	// However gas giants need a lot more (64?) since rays traverse it fully.
 	const int steps = atmo.steps;
 
-	// TODO Compute this in script?
-	vec3 scattering_coefficients = vec3(
-		pow4(400.0 / atmo.scattering_wavelengths.x),
-		pow4(400.0 / atmo.scattering_wavelengths.y),
-		pow4(400.0 / atmo.scattering_wavelengths.z)
-	);
-	scattering_coefficients = mix(vec3(1.0), scattering_coefficients, atmo.scattering_strength);
+	const vec3 scattering_coefficients = atmo.scattering_coefficients;
 
 	float step_len = (t_end - t_begin) / float(steps);
 
@@ -372,9 +381,17 @@ AtmoResult compute_atmosphere(
 		float local_density = get_atmosphere_density(height, atmo);
 		view_ray_optical_depth += local_density * step_len;
 
+		float planet_shadow = get_planet_shadow(
+			pos, 
+			planet_center, 
+			sun_dir, 
+			atmo.planet_shadow_length, 
+			atmo.planet_shadow_offset
+		);
+
 		vec3 transmittance = exp(
 			-(sun_ray_optical_depth + view_ray_optical_depth)
-			* scattering_coefficients);
+			* scattering_coefficients) * planet_shadow;
 
 		total_light += local_density * step_len * transmittance * scattering_coefficients;
 		total_light += local_density * atmo.ambient_color;
@@ -432,27 +449,7 @@ struct CloudSettings {
 	float detail_falloff_distance;
 
 	vec3 scattering_coefficients;
-
-	vec3 sunset_offsets;
-	float sunset_sharpness;
 };
-
-vec3 planet_shadow_curve_vec3(vec3 v) {
-	return smoothstep(vec3(0.0), vec3(1.0), v);
-}
-
-// For each color component, returns an approximation of how much sun light they should get, around the terminator
-vec3 get_planet_shadow(vec3 pos, vec3 sun_dir, CloudSettings settings) {
-	// Offset based on height, so as we progress towards the dark side,
-	// higher clouds get light for longer than lower ones
-	float height_ratio = (length(pos) - settings.bottom_height) / (settings.top_height - settings.bottom_height);
-	float offset_towards_dark_side = height_ratio;
-
-	float ss = settings.sunset_sharpness;
-	float dp = dot(normalize(pos), sun_dir);
-	vec3 sv = vec3(dp * ss) + settings.sunset_offsets + vec3(offset_towards_dark_side);
-	return planet_shadow_curve_vec3(sv);
-}
 
 float henyey_greenstein(float g, float mu) {
 	float gg = g * g;
@@ -619,7 +616,8 @@ CloudResult raymarch_cloud(
 	vec3 cam_pos,
 	CloudSettings settings,
 	vec4 point_light,
-	float night_light_energy
+	float night_light_energy,
+	AtmosphereSettings atmo
 ) {
 
 	// {
@@ -684,6 +682,8 @@ CloudResult raymarch_cloud(
 	CloudResult result = default_cloud_result();
 	const float break_transmittance = 0.01;
 
+	const vec3 atmo_scattering_coefficients = atmo.scattering_coefficients;
+
 	// float current_step_len = lq_step_len;
 
 	for (float i = 0.0; i < max_steps; ++i) {
@@ -701,13 +701,31 @@ CloudResult raymarch_cloud(
 			if (extinction > 0.01) {
 				vec3 light_energy = vec3(0.0);
 
-				vec3 planet_shadow = get_planet_shadow(pos, sun_dir, settings);
-				float planet_shadow_max = max_vec3_component(planet_shadow);
+				float planet_shadow = get_planet_shadow(
+					pos, 
+					vec3(0.0), 
+					sun_dir, 
+					atmo.planet_shadow_length, 
+					atmo.planet_shadow_offset
+				);
+
+				float sun_ray_optical_depth = get_baked_optical_depth(
+					pos, 
+					sun_dir, 
+					vec3(0.0), 
+					u_optical_depth_texture, 
+					atmo
+				);
+				vec3 atmo_transmittance = exp(-sun_ray_optical_depth * atmo_scattering_coefficients);
+				vec3 atmo_light = vec3(atmo_transmittance) * planet_shadow;
+
+
+				float atmo_light_max = max_vec3_component(atmo_light);
 				// float planet_shadow_min = min_vec3_component(planet_shadow);
 
 				// Sun light
-				if (planet_shadow_max > 0.0) {
-					light_energy += planet_shadow * raymarch_light_energy(
+				if (atmo_light_max > 0.0) {
+					light_energy += atmo_light * raymarch_light_energy(
 						pos, 
 						sun_dir, 
 						cam_pos, 
@@ -738,8 +756,8 @@ CloudResult raymarch_cloud(
 
 				// Night light
 				// TODO Option to use cheap height light?
-				if (planet_shadow_max < 1.0) {
-					light_energy += (vec3(1.0) - planet_shadow) * night_light_energy * raymarch_light_energy(
+				if (atmo_light_max < 1.0) {
+					light_energy += (vec3(1.0) - atmo_light) * night_light_energy * raymarch_light_energy(
 						pos, 
 						normalize(pos), 
 						cam_pos, 
@@ -804,7 +822,8 @@ CloudResult render_clouds(
     float time,
     CloudSettings cloud_settings,
 	vec4 point_light,
-	float night_light_energy
+	float night_light_energy,
+	AtmosphereSettings atmo
 ) {
 	vec2 rs_clouds_top = ray_sphere(planet_center_viewspace, cloud_settings.top_height, ray_origin, ray_dir);
 
@@ -846,7 +865,8 @@ CloudResult render_clouds(
 				cam_pos_model,
                 cloud_settings,
 				point_light,
-				night_light_energy
+				night_light_energy,
+				atmo
             );
 		}
 	}
@@ -975,15 +995,22 @@ void main() {
 		// jitter = fract(jitter + float(int(frame) % 32) * golden_ratio);
 
 		AtmosphereSettings atmo;
-		atmo.steps =                   int(u_params.atmo_steps);
-		atmo.planet_radius =           u_params.planet_radius;
-		atmo.height =                  u_params.atmosphere_height;
-		atmo.density =                 u_params.atmosphere_density;
-		atmo.ambient_color =           vec3(0.02);
-		atmo.modulate =                vec3(1.0);
-		atmo.scattering_wavelengths =  vec3(700.0, 530.0, 440.0);
-		atmo.scattering_strength =     u_params.atmosphere_scattering_strength;
-	
+		atmo.steps =                    int(u_params.atmo_steps);
+		atmo.planet_radius =            u_params.planet_radius;
+		atmo.height =                   u_params.atmosphere_height;
+		atmo.density =                  u_params.atmosphere_density;
+		atmo.ambient_color =            vec3(u_params.atmo_ambient_r, u_params.atmo_ambient_g, u_params.atmo_ambient_b);
+		atmo.modulate =                 vec3(1.0);
+		atmo.light_density_scale =      u_params.atmo_light_density_scale;
+		atmo.planet_shadow_length =     u_params.planet_shadow_length;
+		atmo.planet_shadow_offset =     u_params.planet_shadow_offset;
+
+		atmo.scattering_coefficients =  vec3(
+			u_params.atmo_scattering_r,
+			u_params.atmo_scattering_g,
+			u_params.atmo_scattering_b
+		);
+
 		vec2 cloud_coverage_rotation_x = u_pc_params.cloud_coverage_rotation_x;
 		mat2 cloud_coverage_rotation = mat2(cloud_coverage_rotation_x, vec2_rotate_90(cloud_coverage_rotation_x));
 
@@ -1016,12 +1043,6 @@ void main() {
 			u_params.cloud_scattering_g,
 			u_params.cloud_scattering_b
 		);
-		cs.sunset_offsets = vec3(
-			u_params.cloud_sunset_offset_r,
-			u_params.cloud_sunset_offset_g,
-			u_params.cloud_sunset_offset_b
-		);
-		cs.sunset_sharpness =         u_params.cloud_sunset_sharpness;
 
 		vec4 point_light = vec4(
 			u_params.point_light_pos_x,
@@ -1043,7 +1064,8 @@ void main() {
             time,
             cs,
 			point_light,
-			u_params.night_light_energy
+			u_params.night_light_energy,
+			atmo
         );
 #endif
 

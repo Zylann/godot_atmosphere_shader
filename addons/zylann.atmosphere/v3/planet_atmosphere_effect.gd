@@ -7,8 +7,13 @@ extends CompositorEffect
 @export var planet_radius := 100.0
 @export var atmosphere_height := 20.0
 @export var atmosphere_density := 0.2
+@export var atmosphere_light_density := 1.0
 @export_range(1, 64) var atmosphere_steps := 16
 @export_range(0.0, 1.0, 0.01) var atmosphere_scattering_strength := 1.0
+@export var atmosphere_scattering := Color(0.09, 0.32, 0.68)
+@export var atmosphere_ambient_color := Color(0.03, 0.04, 0.05)
+@export_range(0.0, 1.0, 0.01) var planet_shadow_length := 0.2
+@export_range(-1.0, 1.0, 0.01) var planet_shadow_offset := 0.0
 
 @export_group("Light sources")
 @export var sun_direction := Vector3(0.0, -1.0, 0.0)
@@ -22,10 +27,8 @@ extends CompositorEffect
 @export_group("Clouds light", "clouds")
 @export var clouds_light_density_scale := 1.0
 @export_range(0.0, 2.0, 0.01) var clouds_light_reach := 1.0
-@export var clouds_scattering_coefficients := Vector3(0.8, 0.8, 1.0)
+@export var clouds_scattering_coefficients := Color(0.8, 0.8, 1.0)
 @export_range(0.0, 1.0, 0.01) var clouds_gamma_correction := 0.0
-@export var clouds_sunset_offset := Vector3(0.2, 0.1, 1.0)
-@export_range(1.0, 10.0, 0.01) var clouds_sunset_sharpness := 4.0
 
 @export_group("Clouds coverage", "clouds")
 @export var clouds_coverage_cubemap: TextureLayered:
@@ -744,7 +747,7 @@ func _make_params_f32() -> PackedFloat32Array:
 	params_f32.append(planet_radius)
 	params_f32.append(atmosphere_height)
 	params_f32.append(atmosphere_density)
-	params_f32.append(atmosphere_scattering_strength)
+	params_f32.append(0.0)
 	params_f32.append(clouds_density_scale)
 	params_f32.append(clouds_light_density_scale)
 	params_f32.append(clouds_light_reach)
@@ -771,9 +774,9 @@ func _make_params_f32() -> PackedFloat32Array:
 	
 	params_f32.append(night_light_energy)
 
-	params_f32.append(clouds_scattering_coefficients.x)
-	params_f32.append(clouds_scattering_coefficients.y)
-	params_f32.append(clouds_scattering_coefficients.z)
+	params_f32.append(clouds_scattering_coefficients.r)
+	params_f32.append(clouds_scattering_coefficients.g)
+	params_f32.append(clouds_scattering_coefficients.b)
 
 	params_f32.append(clouds_rough_steps)
 	params_f32.append(clouds_sub_steps)
@@ -782,13 +785,20 @@ func _make_params_f32() -> PackedFloat32Array:
 
 	params_f32.append(atmosphere_steps)
 	params_f32.append(clouds_gamma_correction)
-	params_f32.append(0.0)
-	params_f32.append(0.0)
+	params_f32.append(atmosphere_light_density)
+	params_f32.append(planet_shadow_length)
 
-	params_f32.append(clouds_sunset_offset.x)
-	params_f32.append(clouds_sunset_offset.y)
-	params_f32.append(clouds_sunset_offset.z)
-	params_f32.append(clouds_sunset_sharpness)
+	var asc := Color(1.0, 1.0, 1.0, 1.0).lerp(atmosphere_scattering, atmosphere_scattering_strength)
+
+	params_f32.append(planet_shadow_offset)
+	params_f32.append(asc.r)
+	params_f32.append(asc.g)
+	params_f32.append(asc.b)
+
+	params_f32.append(atmosphere_ambient_color.r);
+	params_f32.append(atmosphere_ambient_color.g);
+	params_f32.append(atmosphere_ambient_color.b);
+	params_f32.append(0.0);
 
 	#assert(params_f32.size() % 16 == 0)
 	
