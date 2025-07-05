@@ -3,10 +3,33 @@ class_name PlanetAtmosphereEffect
 extends CompositorEffect
 
 @export_group("Atmosphere")
-@export var model_transform := Transform3D()
-@export var planet_radius := 100.0
-@export var atmosphere_height := 20.0
-@export var atmosphere_density := 0.2
+@export_storage var model_transform := Transform3D()
+
+
+@export var planet_radius := 100.0:
+	set(v):
+		if v == planet_radius:
+			return
+		planet_radius = v
+		_optical_depth.dirty = true
+
+
+@export var atmosphere_height := 20.0:
+	set(v):
+		if v == atmosphere_height:
+			return
+		atmosphere_height = v
+		_optical_depth.dirty = true
+
+
+@export var atmosphere_density := 0.2:
+	set(v):
+		if v == atmosphere_density:
+			return
+		atmosphere_density = v
+		_optical_depth.dirty = true
+
+
 @export var atmosphere_light_density := 1.0
 @export_range(1, 64) var atmosphere_steps := 16
 @export_range(0.0, 1.0, 0.01) var atmosphere_scattering_strength := 1.0
