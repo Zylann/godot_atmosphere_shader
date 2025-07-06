@@ -102,12 +102,21 @@ extends CompositorEffect
 @export var debug_value := 0.0;
 
 const POINT_LIGHT_COUNT = 2
+const POINT_EFFECTOR_COUNT = 2
 
 class PointLightInfo:
 	var position := Vector3()
 	var radius := 10.0
 	var color := Color(1, 1, 1)
 	var energy := 1.0
+	var enabled := false
+
+
+class PointEffectorInfo:
+	var position := Vector3()
+	var inner_radius := 1.0
+	var outer_radius := 2.0
+	var density_bias := 1.0
 	var enabled := false
 
 
@@ -224,12 +233,14 @@ var _nearest_sampler: RID
 var _params_ubo: RID
 var _cam_params_ubo: RID
 var _light_params_ubo: RID
+var _effector_params_ubo: RID
 var _cloud_buffer0: RID
 var _cloud_buffer1: RID
 var _cloud_buffer3: RID
 
 var _frame_counter := 0
 var _point_lights: Array[PointLightInfo] = []
+var _point_effectors: Array[PointEffectorInfo] = []
 var _last_screen_resolution := Vector2i()
 
 var _optical_depth := OpticalDepth.new()
@@ -260,11 +271,19 @@ func _init() -> void:
 		var light := PointLightInfo.new()
 		_point_lights.append(light)
 
+	for i in POINT_EFFECTOR_COUNT:
+		var effector := PointEffectorInfo.new()
+		_point_effectors.append(effector)
+
 	RenderingServer.call_on_render_thread(_init_render)
 
 
 func get_point_light_info(i: int) -> PointLightInfo:
 	return _point_lights[i]
+
+
+func get_point_effector_info(i: int) -> PointEffectorInfo:
+	return _point_effectors[i]
 
 
 func _init_render() -> void:
@@ -294,6 +313,7 @@ func _init_render() -> void:
 
 	_params_ubo = _create_ubo_from_f32_array(_rd, _make_params_f32())
 	_light_params_ubo = _create_ubo_from_f32_array(_rd, _make_light_params_f32())
+	_effector_params_ubo = _create_ubo_from_f32_array(_rd, _make_effector_params_f32())
 	_cam_params_ubo = _create_ubo_from_f32_array(_rd, _make_camera_params_f32(null))
 	
 	_optical_depth.init(_rd)
@@ -335,6 +355,10 @@ func _clear_render() -> void:
 		_rd.free_rid(_light_params_ubo)
 		_light_params_ubo = RID()
 
+	if _effector_params_ubo.is_valid():
+		_rd.free_rid(_effector_params_ubo)
+		_effector_params_ubo = RID()
+
 	if _cam_params_ubo.is_valid():
 		_rd.free_rid(_cam_params_ubo)
 		_cam_params_ubo = RID()
@@ -373,6 +397,7 @@ func _notification(what: int) -> void:
 			_rd.free_rid(_linear_sampler)
 			_rd.free_rid(_params_ubo)
 			_rd.free_rid(_light_params_ubo)
+			_rd.free_rid(_effector_params_ubo)
 			_rd.free_rid(_cam_params_ubo)
 			
 			if _cloud_buffer0.is_valid():
@@ -571,6 +596,7 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 	# TODO Do this only if changed
 	_update_ubo_from_f32_array(_rd, _params_ubo, _make_params_f32())
 	_update_ubo_from_f32_array(_rd, _light_params_ubo, _make_light_params_f32())
+	_update_ubo_from_f32_array(_rd, _effector_params_ubo, _make_effector_params_f32())
 	
 	# # Loop through views just in case we're doing stereo rendering.
 	var view_count := render_scene_buffers.get_view_count()
@@ -667,6 +693,11 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 		light_params_uniform.binding = 12
 		light_params_uniform.add_id(_light_params_ubo)
 
+		var effector_params_uniform := RDUniform.new()
+		effector_params_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_UNIFORM_BUFFER
+		effector_params_uniform.binding = 13
+		effector_params_uniform.add_id(_effector_params_ubo)
+
 		var uniform_set_items: Array[RDUniform]
 		
 		if _full_res:
@@ -680,7 +711,8 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 				optical_depth_texture_uniform,
 				params_uniform,
 				cam_params_uniform,
-				light_params_uniform
+				light_params_uniform,
+				effector_params_uniform
 			]
 		else:
 			uniform_set_items = [
@@ -696,7 +728,8 @@ func _render_callback(p_effect_callback_type: int, p_render_data: RenderData) ->
 				optical_depth_texture_uniform,
 				params_uniform,
 				cam_params_uniform,
-				light_params_uniform
+				light_params_uniform,
+				effector_params_uniform
 			]
 		
 		var post_uniform_set: RID
@@ -861,6 +894,29 @@ func _make_light_params_f32() -> PackedFloat32Array:
 		params_f32.append(pl.color.g)
 		params_f32.append(pl.color.b)
 		params_f32.append(pl.energy if pl.enabled else 0.0)
+
+	return params_f32
+
+
+func _make_effector_params_f32() -> PackedFloat32Array:
+	var world_to_model := model_transform.inverse()
+
+	var params_f32 := PackedFloat32Array()
+
+	for i in _point_effectors.size():
+		var pe := _point_effectors[i]
+
+		var pos := world_to_model * pe.position
+
+		params_f32.append(pos.x)
+		params_f32.append(pos.y)
+		params_f32.append(pos.z)
+		params_f32.append(pe.inner_radius)
+
+		params_f32.append(pe.outer_radius if pe.enabled else 0.0)
+		params_f32.append(pe.density_bias)
+		params_f32.append(0.0)
+		params_f32.append(0.0)
 
 	return params_f32
 

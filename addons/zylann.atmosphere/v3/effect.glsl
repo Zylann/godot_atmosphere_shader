@@ -33,6 +33,7 @@
 #define ENABLE_ATMO
 
 #define POINT_LIGHT_COUNT 2
+#define POINT_EFFECTOR_COUNT 2
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -136,6 +137,23 @@ struct LightParam {
 layout (binding = 12) uniform PointLightParams {
 	LightParam points[POINT_LIGHT_COUNT];
 } u_light_params;
+
+struct EffectorParam {
+	float x;
+	float y;
+	float z;
+	float inner_radius;
+
+	float outer_radius;
+	float density_bias;
+	float reserved0;
+	float reserved1;
+};
+
+// Effectors
+layout (binding = 13) uniform PointEffectorParams {
+	EffectorParam points[POINT_LIGHT_COUNT];
+} u_effector_params;
 
 // Parameters that may change every frame
 layout(push_constant, std430) uniform PcParams {
@@ -471,6 +489,7 @@ struct CloudSettings {
 	vec3 scattering_coefficients;
 
 	LightParam point_lights[POINT_LIGHT_COUNT];
+	EffectorParam point_effectors[POINT_EFFECTOR_COUNT];
 };
 
 float henyey_greenstein(float g, float mu) {
@@ -506,6 +525,17 @@ Coverage sample_sdf_low(vec3 pos, CloudSettings settings) {
 	vec3 coverage_uv = vec3(coverage_pos_2d.x, pos.y, coverage_pos_2d.y);
 	float coverage = texture(u_cloud_coverage_cubemap, coverage_uv).r;
 	float map_sd = (coverage * 2.0 - 1.0 + settings.coverage_bias) * distance_to_core;
+
+	// TODO Sometimes can't affect areas with no coverage, need to refactor the way coverage works
+	for (int i = 0; i < POINT_EFFECTOR_COUNT; ++i) {
+		EffectorParam effector = settings.point_effectors[i];
+		if (effector.outer_radius != 0.0) {
+			vec3 fpos = vec3(effector.x, effector.y, effector.z);
+			float d = distance(pos, fpos);
+			float f = 1.0 - smoothstep(effector.inner_radius, effector.outer_radius, d);
+			map_sd -= f * effector.density_bias;
+		}
+	}
 
 	float sd = max(shell_sd, map_sd);
 	
@@ -1066,6 +1096,7 @@ void main() {
         cs.detail_amount =            u_params.cloud_detail_amount;
         cs.detail_falloff_distance =  u_params.cloud_detail_falloff_distance;
 		cs.point_lights =             u_light_params.points;
+		cs.point_effectors =          u_effector_params.points;
 
 		cs.scattering_coefficients =  vec3(
 			u_params.cloud_scattering_r,

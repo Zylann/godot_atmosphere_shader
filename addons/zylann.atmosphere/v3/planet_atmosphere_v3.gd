@@ -11,6 +11,13 @@ extends Node3D
 		point_light_paths = a
 
 
+@export var point_effector_paths: Array[NodePath] = []:
+	set(a):
+		if a.size() > PlanetAtmosphereEffect.POINT_EFFECTOR_COUNT:
+			return
+		point_effector_paths = a
+
+
 var _directional_light: DirectionalLight3D
 #var _world_environment: WorldEnvironment
 
@@ -65,6 +72,29 @@ func _process(delta: float) -> void:
 			pl.color = light_node.light_color
 			pl.radius = light_node.omni_range
 			pl.energy = light_node.light_energy
+		
+		for pe_index in PlanetAtmosphereEffect.POINT_EFFECTOR_COUNT:
+			var pe := compositor_effect.get_point_effector_info(pe_index)
+			if pe_index >= point_effector_paths.size():
+				pe.enabled = false
+				continue
+			var path := point_effector_paths[pe_index]
+			if path.is_empty():
+				pe.enabled = false
+				continue
+			var node := get_node(path)
+			if node == null:
+				pe.enabled = false
+				continue
+			var pe_node := node as PlanetAtmospherePointEffector
+			if pe_node == null:
+				pe.enabled = false
+				continue
+			pe.enabled = pe_node.visible
+			pe.position = pe_node.position
+			pe.outer_radius = pe_node.radius
+			pe.inner_radius = clampf(pe.outer_radius - pe_node.falloff, 0.0, pe.outer_radius - 0.01)
+			pe.density_bias = pe_node.density_bias
 
 
 static func is_null_or_invalid(o) -> bool:
