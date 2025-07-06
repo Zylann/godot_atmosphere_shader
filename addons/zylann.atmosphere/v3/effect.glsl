@@ -32,6 +32,8 @@
 #define ENABLE_CLOUDS
 #define ENABLE_ATMO
 
+#define POINT_LIGHT_COUNT 2
+
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 #ifdef FULL_RES
@@ -85,12 +87,6 @@ layout (binding = 10) uniform Params {
 	float cloud_detail_amount;// = 1.0;
 	float cloud_detail_falloff_distance;
 
-	// TODO Have a few more point lights?
-	float point_light_pos_x;
-	float point_light_pos_y;
-	float point_light_pos_z;
-	float point_light_radius;
-
 	float night_light_energy;
 
 	float cloud_scattering_r;
@@ -124,23 +120,47 @@ layout (binding = 11) uniform CamParams {
     mat4 inv_projection_matrix;
 } u_cam_params;
 
+struct LightParam {
+	float x;
+	float y;
+	float z;
+	float radius;
+
+	float r;
+	float g;
+	float b;
+	float energy;
+};
+
+// Lights
+layout (binding = 12) uniform PointLightParams {
+	LightParam points[POINT_LIGHT_COUNT];
+} u_light_params;
+
 // Parameters that may change every frame
 layout(push_constant, std430) uniform PcParams {
-    vec2 raster_size; // 0..7
-    float time; // 8..11
-    float frame; // 12..15
+	// 0..15
+    vec2 raster_size;
+    float time;
+    float frame;
 
-    vec4 planet_center_viewspace; // 16..31 // w contains sphere_depth_factor
+	// 16..31
+    vec4 planet_center_viewspace; // w contains sphere_depth_factor
 
-    vec4 sun_center_viewspace; // 32..47 // w is not used
+	// 32..47
+    vec4 sun_center_viewspace; // w is not used
 
-    vec2 cloud_coverage_rotation_x; // 48..55
-    float debug_value; // 56..59
-    float reserved2; // 60..63
+	// 48..63
+    vec2 cloud_coverage_rotation_x;
+    float debug_value;
+    float reserved2;
 
+	// 64..79
 	vec2 screen_size;
     float reserved3;
     float reserved4;
+
+	// Minimum push constant size: 128
 } u_pc_params;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -449,6 +469,8 @@ struct CloudSettings {
 	float detail_falloff_distance;
 
 	vec3 scattering_coefficients;
+
+	LightParam point_lights[POINT_LIGHT_COUNT];
 };
 
 float henyey_greenstein(float g, float mu) {
@@ -589,8 +611,8 @@ vec3 raymarch_light_energy(
 	return beers_law * mix(2.0 * powder, vec3(1.0), mu * 0.5 + 0.5);
 }
 
-float calculate_point_light_energy_factor(vec3 pos, vec4 point_light) {
-	return 1.1 * pow4(max(1.0 - distance(point_light.xyz, pos) / point_light.w, 0.0));
+float calculate_point_light_energy_factor(vec3 pos, vec3 light_pos, float radius, float energy) {
+	return energy * pow4(max(1.0 - distance(light_pos, pos) / radius, 0.0));
 }
 
 struct CloudResult {
@@ -615,7 +637,6 @@ CloudResult raymarch_cloud(
 	float time, 
 	vec3 cam_pos,
 	CloudSettings settings,
-	vec4 point_light,
 	float night_light_energy,
 	AtmosphereSettings atmo
 ) {
@@ -719,7 +740,6 @@ CloudResult raymarch_cloud(
 				vec3 atmo_transmittance = exp(-sun_ray_optical_depth * atmo_scattering_coefficients);
 				vec3 atmo_light = vec3(atmo_transmittance) * planet_shadow;
 
-
 				float atmo_light_max = max_vec3_component(atmo_light);
 				// float planet_shadow_min = min_vec3_component(planet_shadow);
 
@@ -740,18 +760,28 @@ CloudResult raymarch_cloud(
 				// Point lights
 				// light_energy += calculate_point_light_energy(pos, point_light);
 				// TODO Option to disable raymarching
-				float pt_light_energy_f = calculate_point_light_energy_factor(pos, point_light);
-				if (pt_light_energy_f > 0.0) {
-					light_energy += vec3(0.6, 0.8, 1.0) * pt_light_energy_f * raymarch_light_energy(
-						pos, 
-						normalize(point_light.xyz - pos), 
-						cam_pos, 
-						ray_dir, 
-						time, 
-						jitter, 
-						settings, 
-						settings.secondary_light_steps
-					);
+				for (int light_index = 0; light_index < POINT_LIGHT_COUNT; ++light_index) {
+					LightParam light = settings.point_lights[light_index];
+
+					if (light.energy != 0.0) {
+						vec3 pt_pos = vec3(light.x, light.y, light.z);
+						float pt_energy = calculate_point_light_energy_factor(pos, pt_pos, light.radius, light.energy);
+
+						if (pt_energy > 0.0) {
+							vec3 pt_color = vec3(light.r, light.g, light.b);
+
+							light_energy += pt_color * pt_energy * raymarch_light_energy(
+								pos, 
+								normalize(pt_pos - pos), 
+								cam_pos, 
+								ray_dir, 
+								time, 
+								jitter, 
+								settings, 
+								settings.secondary_light_steps
+							);
+						}
+					}
 				}
 
 				// Night light
@@ -821,7 +851,6 @@ CloudResult render_clouds(
 	float jitter,
     float time,
     CloudSettings cloud_settings,
-	vec4 point_light,
 	float night_light_energy,
 	AtmosphereSettings atmo
 ) {
@@ -864,7 +893,6 @@ CloudResult render_clouds(
 				time, 
 				cam_pos_model,
                 cloud_settings,
-				point_light,
 				night_light_energy,
 				atmo
             );
@@ -1037,18 +1065,12 @@ void main() {
         cs.detail_scale =             u_params.cloud_detail_scale;
         cs.detail_amount =            u_params.cloud_detail_amount;
         cs.detail_falloff_distance =  u_params.cloud_detail_falloff_distance;
+		cs.point_lights =             u_light_params.points;
 
 		cs.scattering_coefficients =  vec3(
 			u_params.cloud_scattering_r,
 			u_params.cloud_scattering_g,
 			u_params.cloud_scattering_b
-		);
-
-		vec4 point_light = vec4(
-			u_params.point_light_pos_x,
-			u_params.point_light_pos_y,
-			u_params.point_light_pos_z,
-			u_params.point_light_radius
 		);
 
 #ifdef ENABLE_CLOUDS
@@ -1063,7 +1085,6 @@ void main() {
             jitter,
             time,
             cs,
-			point_light,
 			u_params.night_light_energy,
 			atmo
         );

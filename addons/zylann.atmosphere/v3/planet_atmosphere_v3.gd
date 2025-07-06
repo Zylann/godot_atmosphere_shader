@@ -4,7 +4,12 @@ extends Node3D
 
 
 @export var compositor_effect: PlanetAtmosphereEffect
-@export var point_light_path := NodePath()
+@export var point_light_paths: Array[NodePath] = []:
+	set(a):
+		if a.size() > PlanetAtmosphereEffect.POINT_LIGHT_COUNT:
+			return
+		point_light_paths = a
+
 
 var _directional_light: DirectionalLight3D
 #var _world_environment: WorldEnvironment
@@ -15,6 +20,7 @@ func _process(delta: float) -> void:
 		_directional_light = find_directional_light(get_viewport())
 
 	if compositor_effect == null:
+		# Try to locate the effect
 		#if is_null_or_invalid(_world_environment):
 		# https://github.com/godotengine/godot-proposals/issues/9815
 		var world_environment := find_world_environment(get_viewport())
@@ -35,18 +41,30 @@ func _process(delta: float) -> void:
 				compositor.compositor_effects = effects
 	
 	if compositor_effect != null:
+		# Update compositor parameters from scene nodes
 		if _directional_light != null:
-			compositor_effect.sun_direction = -_directional_light.global_transform.basis.z
+			compositor_effect.sun_direction = - _directional_light.global_transform.basis.z
 			compositor_effect.model_transform = global_transform
-			
-		if not point_light_path.is_empty():
-			var point_light_node : Node = get_node(point_light_path)
-			var point_light := point_light_node as OmniLight3D
-			if point_light != null:
-				compositor_effect.set_point_light(
-					point_light.global_position, 
-					point_light.omni_range
-				)
+		
+		for pl_index in PlanetAtmosphereEffect.POINT_LIGHT_COUNT:
+			var pl := compositor_effect.get_point_light_info(pl_index)
+			if pl_index >= point_light_paths.size():
+				pl.enabled = false
+				continue
+			var path := point_light_paths[pl_index]
+			if path.is_empty():
+				pl.enabled = false
+				continue
+			var node: Node = get_node(path)
+			var light_node := node as OmniLight3D
+			if light_node == null:
+				pl.enabled = false
+				continue
+			pl.enabled = light_node.visible
+			pl.position = light_node.global_position
+			pl.color = light_node.light_color
+			pl.radius = light_node.omni_range
+			pl.energy = light_node.light_energy
 
 
 static func is_null_or_invalid(o) -> bool:
